@@ -1,0 +1,59 @@
+name: "feat: Nueva funcionalidad"
+description: Propuesta de nueva característica o mejora
+labels: ["feat:", "priority: media"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Nueva funcionalidad para sifen-api
+
+  - type: textarea
+    id: contexto
+    attributes:
+      label: Contexto
+      description: ¿Por qué se necesita esta funcionalidad? ¿Qué problema resuelve?
+      placeholder: |
+        Actualmente no es posible... lo que provoca que los integradores deban...
+        Esta funcionalidad permitiría...
+    validations:
+      required: true
+
+  - type: textarea
+    id: tareas
+    attributes:
+      label: Tareas
+      description: Desglose técnico de lo que hay que implementar
+      value: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: criterio
+    attributes:
+      label: Criterio de aceptación
+      description: ¿Cómo sabremos que está terminado?
+      value: |
+        - [ ] El endpoint responde correctamente con payload válido
+        - [ ] Tests unitarios cubren el happy path y edge cases principales
+        - [ ] OpenAPI spec actualizada
+        - [ ] CONTEXT.md actualizado
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tipo_documento
+    attributes:
+      label: Tipo de documento SIFEN afectado (si aplica)
+      multiple: true
+      options:
+        - "Factura Electrónica (tipo 1)"
+        - "Factura Exportación (tipo 2)"
+        - "Autofactura (tipo 4)"
+        - "Nota de Crédito (tipo 5)"
+        - "Nota de Débito (tipo 6)"
+        - "Nota de Remisión (tipo 7)"
+        - "Retención (tipo 8)"
+        - "Todos / No aplica"

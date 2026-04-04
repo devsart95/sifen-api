@@ -1,0 +1,83 @@
+name: "fix: Reporte de bug"
+description: Algo no funciona correctamente
+labels: ["fix:", "priority: alta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Reporte de bug en sifen-api
+
+  - type: textarea
+    id: contexto
+    attributes:
+      label: Contexto
+      description: ¿Qué estabas haciendo cuando ocurrió el error? Incluye endpoint, payload y respuesta recibida.
+      placeholder: |
+        Al enviar una factura electrónica tipo 1 con receptor de tipo RUC, el endpoint
+        POST /v1/documentos retorna 500 en lugar de procesar el documento...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduccion
+    attributes:
+      label: Pasos para reproducir
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: esperado
+    attributes:
+      label: Comportamiento esperado
+      placeholder: El documento debería enviarse a SIFEN y retornar el CDC aprobado.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamiento actual
+      placeholder: Retorna error 500 con mensaje "Cannot read properties of undefined"
+    validations:
+      required: true
+
+  - type: textarea
+    id: tareas
+    attributes:
+      label: Tareas
+      value: |
+        - [ ] Reproducir el bug con test
+        - [ ] Identificar root cause
+        - [ ] Aplicar fix
+        - [ ] Verificar que el test pasa
+    validations:
+      required: true
+
+  - type: textarea
+    id: criterio
+    attributes:
+      label: Criterio de aceptación
+      value: |
+        - [ ] Test que reproduce el bug existe y pasa después del fix
+        - [ ] No hay regresiones en tests existentes
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versión de sifen-api
+      placeholder: "0.1.0"
+
+  - type: dropdown
+    id: ambiente
+    attributes:
+      label: Ambiente SIFEN
+      options:
+        - Homologación (test)
+        - Producción
+        - Ambos

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentación SIFEN (SET Paraguay)
+    url: https://ekuatia.set.gov.py/portal/ekuatia/
+    about: Manual Técnico v150 y schemas XSD oficiales
+  - name: Discusiones
+    url: https://github.com/devsart95/sifen-api/discussions
+    about: Preguntas, ideas y consultas generales
