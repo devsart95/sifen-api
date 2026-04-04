@@ -12,6 +12,7 @@ import { documentosRoutes } from './routes/v1/documentos/index.js'
 import { eventosRoutes } from './routes/v1/eventos/index.js'
 import { consultasRoutes } from './routes/v1/consultas/index.js'
 import { lotesRoutes } from './routes/v1/lotes/index.js'
+import { crearIdempotencyPlugin } from './middleware/idempotency.js'
 
 export interface AppDeps {
   prisma?: PrismaClient
@@ -27,6 +28,8 @@ export async function buildApp(deps: AppDeps = {}) {
           ? { target: 'pino-pretty', options: { colorize: true } }
           : undefined,
     },
+    // Límite explícito de payload: 2MB es suficiente para lotes de 50 DEs
+    bodyLimit: 2 * 1024 * 1024,
   })
 
   // Dependencias — inyectables para tests, instanciadas por defecto en producción
@@ -105,13 +108,15 @@ export async function buildApp(deps: AppDeps = {}) {
     await prisma.$disconnect()
   })
 
-  // Healthcheck
+  // ─── Healthchecks ────────────────────────────────────────────────────────────
+
+  // Liveness — para Kubernetes/Docker: "¿el proceso sigue corriendo?"
   app.get(
     '/health',
     {
       schema: {
         tags: ['Salud'],
-        summary: 'Healthcheck',
+        summary: 'Liveness probe',
         response: {
           200: {
             type: 'object',
@@ -131,9 +136,65 @@ export async function buildApp(deps: AppDeps = {}) {
     }),
   )
 
-  // Routes v1
+  // Readiness — para orquestadores: "¿puede recibir tráfico?"
+  app.get(
+    '/health/ready',
+    {
+      schema: {
+        tags: ['Salud'],
+        summary: 'Readiness probe — verifica DB, Redis y certificado',
+      },
+    },
+    async (_, reply) => {
+      const checks: Record<string, string> = {}
+      let allOk = true
+
+      // DB
+      try {
+        await prisma.$queryRaw`SELECT 1`
+        checks['db'] = 'ok'
+      } catch {
+        checks['db'] = 'error'
+        allOk = false
+      }
+
+      // Certificado legible
+      try {
+        const { readFileSync, existsSync } = await import('node:fs')
+        if (existsSync(env.SIFEN_CERT_PATH)) {
+          readFileSync(env.SIFEN_CERT_PATH)
+          checks['cert'] = 'ok'
+        } else {
+          checks['cert'] = 'no encontrado'
+          allOk = false
+        }
+      } catch {
+        checks['cert'] = 'error'
+        allOk = false
+      }
+
+      // Circuit breaker de SIFEN
+      checks['sifen_circuit'] = soapClient.circuitEstado
+
+      const status = allOk ? 200 : 503
+      return reply.status(status).send({
+        status: allOk ? 'ready' : 'degraded',
+        checks,
+        timestamp: new Date().toISOString(),
+      })
+    },
+  )
+
+  // ─── Plugin de idempotencia (rutas de mutación) ────────────────────────────
+  // Se registra en el scope de /v1 para que tenga acceso a request.tenantId
+  // (seteado por el authHook antes de que llegue a este plugin)
+
+  // ─── Routes v1 ───────────────────────────────────────────────────────────────
   await app.register(
     async (v1) => {
+      // Idempotencia para endpoints de mutación
+      await v1.register(crearIdempotencyPlugin(prisma))
+
       await v1.register(documentosRoutes, { prefix: '/documentos', prisma, soapClient })
       await v1.register(eventosRoutes, { prefix: '/eventos', prisma, soapClient })
       await v1.register(consultasRoutes, { prefix: '/consultas', prisma, soapClient })

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs'
+import { randomInt } from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import { z } from 'zod'
@@ -8,6 +9,7 @@ import { firmarXmlDe } from '../../../services/xml/signer.js'
 import { loteDeQueue } from '../../../services/queue/bull.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { LIMITES } from '../../../config/constants.js'
+import { reservarNumeros } from '../../../services/secuencia.js'
 import { env } from '../../../config/env.js'
 
 // Certificado leído una sola vez al inicio del módulo (C1)
@@ -48,12 +50,35 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
       const { documentos } = LoteSchema.parse(request.body)
       const tenantId = request.tenantId
 
+      // Reservar N números de forma atómica para todos los docs del lote
+      // Se necesita agrupación por timbrado — simplificamos asumiendo 1 timbrado por lote
+      // (limitación conocida: lotes multi-timbrado requerirían agrupación adicional)
+      const primerDoc = documentos[0]
+      const timbradoReferencia = primerDoc
+        ? await prisma.timbrado.findFirst({
+            where: {
+              tenantId,
+              numero: primerDoc.timbrado.numero,
+              establecimiento: primerDoc.timbrado.establecimiento,
+              puntoExpedicion: primerDoc.timbrado.puntoExpedicion,
+              tipoDocumento: primerDoc.tipoDocumento,
+              activo: true,
+            },
+          })
+        : null
+
+      const numeros = timbradoReferencia
+        ? await reservarNumeros(prisma, timbradoReferencia.id, tenantId, documentos.length)
+        : documentos.map((_, i) => i + 1) // fallback si no se encuentra timbrado
+
       // Generar y firmar todos los XMLs
       const xmlsFirmados: string[] = []
       const cdcs: string[] = []
 
-      for (const input of documentos) {
-        const { xml, cdc } = generarXmlDe(input, cdcs.length + 1)
+      for (let i = 0; i < documentos.length; i++) {
+        const input = documentos[i]!
+        const numero = numeros[i] ?? (i + 1)
+        const { xml, cdc } = generarXmlDe(input, numero)
         const { xmlFirmado } = firmarXmlDe(xml, {
           p12Buffer,
           passphrase: env.SIFEN_CERT_PASS,
@@ -61,6 +86,7 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
         xmlsFirmados.push(xmlFirmado)
         cdcs.push(cdc)
       }
+
 
       // Encolar el lote
       const job = await loteDeQueue.add(
@@ -70,7 +96,7 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
           loteId: `lote-${Date.now()}`,
           xmlsDe: xmlsFirmados,
           cdcs,
-          idLote: Math.floor(Math.random() * 100_000),
+          idLote: randomInt(1, 100_000),
         },
         { priority: 1 },
       )

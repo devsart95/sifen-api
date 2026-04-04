@@ -15,14 +15,17 @@ model Tenant {
   ruc           String   @unique
   dvRuc         String   @map("dv_ruc")
   activo        Boolean  @default(true)
+  rateLimitMax  Int?     @map("rate_limit_max")   // override del global por tenant
   creadoEn      DateTime @default(now()) @map("creado_en")
   actualizadoEn DateTime @updatedAt @map("actualizado_en")
 
-  apiKeys    ApiKey[]
-  timbrados  Timbrado[]
-  documentos DocumentoElectronico[]
-  eventos    EventoElectronico[]
-  auditLogs  AuditLog[]
+  apiKeys      ApiKey[]
+  timbrados    Timbrado[]
+  documentos   DocumentoElectronico[]
+  eventos      EventoElectronico[]
+  auditLogs    AuditLog[]
+  secuencias   SecuenciaTimbrado[]
+  idempotencia IdempotencyRecord[]
 
   @@map("tenants")
 }
@@ -30,10 +33,10 @@ model Tenant {
 model ApiKey {
   id        String    @id @default(cuid())
   tenantId  String    @map("tenant_id")
-  // hash bcrypt — NUNCA guardar el key en texto plano
   hash      String    @unique
   nombre    String
   activa    Boolean   @default(true)
+  isAdmin   Boolean   @default(false) @map("is_admin")  // acceso a rutas /admin
   ultimoUso DateTime? @map("ultimo_uso")
   creadaEn  DateTime  @default(now()) @map("creada_en")
 
@@ -58,9 +61,23 @@ model Timbrado {
 
   tenant     Tenant                 @relation(fields: [tenantId], references: [id])
   documentos DocumentoElectronico[]
+  secuencia  SecuenciaTimbrado?
 
   @@unique([tenantId, numero, establecimiento, puntoExpedicion, tipoDocumento])
   @@map("timbrados")
+}
+
+// Secuencia atómica por timbrado — evita race conditions en numeración correlativa
+model SecuenciaTimbrado {
+  timbradoId    String   @id @map("timbrado_id")
+  tenantId      String   @map("tenant_id")
+  ultimoNumero  Int      @default(0) @map("ultimo_numero")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  timbrado Timbrado @relation(fields: [timbradoId], references: [id])
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@map("secuencias_timbrado")
 }
 
 // ─── Documentos Electrónicos ─────────────────────────────────────────────────
@@ -69,9 +86,11 @@ enum EstadoDE {
   PENDIENTE
   ENVIADO
   APROBADO
+  APROBADO_CON_OBSERVACIONES
   RECHAZADO
   CANCELADO
   INUTILIZADO
+  EN_PROCESO  // lote async — SIFEN recibió pero aún no procesó
   ERROR
 }
 
@@ -81,6 +100,7 @@ model DocumentoElectronico {
   timbradoId    String   @map("timbrado_id")
   cdc           String   @unique
   numero        Int
+
   tipoDocumento Int      @map("tipo_documento")
   tipoEmision   Int      @default(1) @map("tipo_emision")
   estado        EstadoDE @default(PENDIENTE)
@@ -95,9 +115,11 @@ model DocumentoElectronico {
   totalIva    Int    @map("total_iva")
 
   // XML y respuesta SIFEN
-  xmlFirmado   String? @map("xml_firmado") @db.Text
-  xmlRespuesta String? @map("xml_respuesta") @db.Text
-  nroProtocolo String? @map("nro_protocolo")
+  xmlFirmado            String? @map("xml_firmado") @db.Text
+  xmlRespuesta          String? @map("xml_respuesta") @db.Text
+  nroProtocolo          String? @map("nro_protocolo")
+  codigoRespuestaSifen  String? @map("codigo_respuesta_sifen")   // dCodRes de SIFEN
+  mensajeRespuestaSifen String? @map("mensaje_respuesta_sifen")  // dMsgRes de SIFEN
 
   // Fechas
   fechaEmision    DateTime  @map("fecha_emision")
@@ -110,14 +132,31 @@ model DocumentoElectronico {
   eventos   EventoElectronico[]
   auditLogs AuditLog[]
 
+  @@unique([tenantId, timbradoId, numero])  // protección contra duplicados a nivel DB
   @@index([tenantId, estado])
   @@index([tenantId, fechaEmision])
   @@map("documentos_electronicos")
 }
 
+// ─── Idempotencia ─────────────────────────────────────────────────────────────
+
+// Registro para X-Idempotency-Key — evita doble emisión por retry de red
+model IdempotencyRecord {
+  key          String   @id                        // X-Idempotency-Key del cliente
+  tenantId     String   @map("tenant_id")
+  responseBody Json     @map("response_body")       // respuesta original serializada
+  statusCode   Int      @map("status_code")
+  expiresAt    DateTime @map("expires_at")          // TTL: 24 horas
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
+
 // ─── Eventos ──────────────────────────────────────────────────────────────────
 
-// Enum separado: los estados de un evento son distintos a los de un DE
 enum EstadoEvento {
   PENDIENTE
   ENVIADO
@@ -164,14 +203,14 @@ model AuditLog {
   id          String     @id @default(cuid())
   tenantId    String     @map("tenant_id")
   accion      TipoAccion
-  // IDs relacionados (opcionales según la acción)
   documentoId String?    @map("documento_id")
   eventoId    String?    @map("evento_id")
-  // Detalle de la operación
   exitoso     Boolean
   mensaje     String?
-  detalles    Json?      // payload de request/respuesta truncado para debug
+  detalles    Json?
   ip          String?
+  userAgent   String?    @map("user_agent")
+  durationMs  Int?       @map("duration_ms")
   creadoEn    DateTime   @default(now()) @map("creado_en")
 
   tenant     Tenant                 @relation(fields: [tenantId], references: [id])

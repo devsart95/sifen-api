@@ -9,6 +9,8 @@ import { validarEstructuraXml } from '../../../services/xml/validator.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { calcularTotalesIva, type ItemIva } from '../../../utils/iva.js'
 import { generarKudePdf } from '../../../services/kude/generator.js'
+import { reservarNumeros } from '../../../services/secuencia.js'
+import { parsearRespuestaSifen } from '../../../services/xml/parser.js'
 import { env } from '../../../config/env.js'
 
 // Certificado leído una sola vez al inicio del módulo (C1)
@@ -43,6 +45,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
       },
     },
     async (request, reply) => {
+      const inicio = Date.now()
       const input = EmitirDeSchema.parse(request.body)
       const tenantId = request.tenantId
 
@@ -66,7 +69,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      // 2. Calcular totales IVA para persistencia en DB
+      // 2. Calcular totales IVA
       const itemsIva: ItemIva[] = input.items.map((item) => ({
         precioUnitario: item.precioUnitario,
         cantidad: item.cantidad,
@@ -76,16 +79,11 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
       }))
       const totales = calcularTotalesIva(itemsIva)
 
-      // 3. Obtener próximo número correlativo del timbrado (A1)
-      const ultimoDoc = await prisma.documentoElectronico.findFirst({
-        where: { timbradoId: timbrado.id },
-        orderBy: { numero: 'desc' },
-        select: { numero: true },
-      })
-      const numeroSiguiente = (ultimoDoc?.numero ?? 0) + 1
+      // 3. Reservar número correlativo de forma atómica (B1 — sin race condition)
+      const [numero] = await reservarNumeros(prisma, timbrado.id, tenantId, 1)
 
       // 4. Generar XML
-      const { xml, cdc, urlQr } = generarXmlDe(input, numeroSiguiente)
+      const { xml, cdc, urlQr } = generarXmlDe(input, numero!)
 
       // 5. Validar estructura antes de firmar
       const validacion = validarEstructuraXml(xml)
@@ -104,16 +102,16 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         passphrase: env.SIFEN_CERT_PASS,
       })
 
-      // 6. Actualizar URL QR con el DigestValue real (post-firma)
+      // 7. Actualizar URL QR con el DigestValue real (post-firma)
       const urlQrFinal = urlQr.replace('DigestValue=&', `DigestValue=${encodeURIComponent(digestValue)}&`)
 
-      // 7. Guardar en DB con estado PENDIENTE
+      // 8. Guardar en DB con estado PENDIENTE
       const documento = await prisma.documentoElectronico.create({
         data: {
           tenantId,
           timbradoId: timbrado.id,
           cdc,
-          numero: parseInt(cdc.slice(19, 26), 10),
+          numero,
           tipoDocumento: input.tipoDocumento,
           tipoEmision: input.tipoEmision,
           estado: 'PENDIENTE',
@@ -127,7 +125,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         },
       })
 
-      // 8. Enviar a SIFEN — con recovery si falla inesperadamente (C2)
+      // 9. Enviar a SIFEN — con recovery si falla inesperadamente (C2)
       let respuestaSifen: Awaited<ReturnType<typeof soapClient.recibirDe>>
       try {
         respuestaSifen = await soapClient.recibirDe(xmlFirmado)
@@ -139,18 +137,27 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         throw err
       }
 
-      // 9. Actualizar estado según respuesta
-      const estadoFinal = respuestaSifen.ok ? 'APROBADO' : 'RECHAZADO'
+      // 10. Parsear respuesta SIFEN para extraer código y mensaje (B7)
+      const respuestaParsed = respuestaSifen.data
+        ? parsearRespuestaSifen(respuestaSifen.data)
+        : null
+
+      const estadoFinal = respuestaSifen.ok
+        ? (respuestaParsed?.tieneObservaciones ? 'APROBADO_CON_OBSERVACIONES' : 'APROBADO')
+        : 'RECHAZADO'
+
       await prisma.documentoElectronico.update({
         where: { id: documento.id },
         data: {
           estado: estadoFinal,
           xmlRespuesta: respuestaSifen.data ?? respuestaSifen.error,
           fechaAprobacion: respuestaSifen.ok ? new Date() : undefined,
+          codigoRespuestaSifen: respuestaParsed?.codigo,
+          mensajeRespuestaSifen: respuestaParsed?.mensaje,
         },
       })
 
-      // 10. Audit log
+      // 11. Audit log
       await prisma.auditLog.create({
         data: {
           tenantId,
@@ -159,6 +166,8 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
           exitoso: respuestaSifen.ok,
           mensaje: respuestaSifen.ok ? 'DE aprobado por SIFEN' : respuestaSifen.error,
           ip: request.ip,
+          userAgent: request.headers['user-agent'] ?? null,
+          durationMs: Date.now() - inicio,
         },
       })
 
@@ -166,7 +175,8 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         return reply.status(422).send({
           statusCode: 422,
           error: 'SIFEN rechazó el documento',
-          message: respuestaSifen.error ?? 'Error desconocido al enviar a SIFEN',
+          message: respuestaParsed?.mensaje ?? respuestaSifen.error ?? 'Error desconocido al enviar a SIFEN',
+          codigoSifen: respuestaParsed?.codigo,
           cdc,
         })
       }
@@ -175,6 +185,8 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         cdc,
         estado: estadoFinal,
         urlQr: urlQrFinal,
+        codigoSifen: respuestaParsed?.codigo,
+        mensajeSifen: respuestaParsed?.mensaje,
         xmlRespuesta: respuestaSifen.data,
       })
     },
@@ -207,7 +219,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
           id: true, cdc: true, estado: true, tipoDocumento: true,
           receptorNombre: true, totalBruto: true, totalIva: true,
           moneda: true, fechaEmision: true, fechaAprobacion: true,
-          nroProtocolo: true,
+          nroProtocolo: true, codigoRespuestaSifen: true, mensajeRespuestaSifen: true,
         },
       })
 

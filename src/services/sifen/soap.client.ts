@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as https from 'node:https'
 import { SIFEN_ENDPOINTS, SIFEN_NAMESPACE, SOAP_NAMESPACE, LIMITES } from '../../config/constants.js'
 import { env } from '../../config/env.js'
+import { CircuitBreaker, CircuitBreakerOpenError, type CircuitState } from './circuit-breaker.js'
 
 export type SifenAmbiente = 'test' | 'produccion'
 
@@ -21,9 +22,15 @@ export interface SoapResponse {
 export class SifenSoapClient {
   private readonly http: AxiosInstance
   private readonly endpoints: (typeof SIFEN_ENDPOINTS)[SifenAmbiente]
+  private readonly cb: CircuitBreaker
 
   constructor(ambiente: SifenAmbiente = env.SIFEN_AMBIENTE) {
     this.endpoints = SIFEN_ENDPOINTS[ambiente]
+    this.cb = new CircuitBreaker('sifen', {
+      umbralFallos: 5,
+      ventanaMs: 60_000,
+      cooldownMs: 30_000,
+    })
 
     const pfxBuffer = fs.readFileSync(env.SIFEN_CERT_PATH)
 
@@ -45,6 +52,11 @@ export class SifenSoapClient {
       // Forzar respuesta como texto (SIFEN devuelve XML, no JSON)
       responseType: 'text',
     })
+  }
+
+  /** Estado del circuit breaker — expuesto para healthcheck y métricas */
+  get circuitEstado(): CircuitState {
+    return this.cb.estadoActual
   }
 
   /** Envía un DE de forma síncrona (respuesta inmediata) */
@@ -111,7 +123,9 @@ export class SifenSoapClient {
 
   private async post(endpoint: string, body: string): Promise<SoapResponse> {
     try {
-      const response = await this.http.post<string>(endpoint, body)
+      const response = await this.cb.ejecutar(() =>
+        this.http.post<string>(endpoint, body),
+      )
       const data: unknown = response.data
       return {
         ok: true,
@@ -119,11 +133,14 @@ export class SifenSoapClient {
         statusCode: response.status,
       }
     } catch (error) {
+      if (error instanceof CircuitBreakerOpenError) {
+        return { ok: false, error: error.message, statusCode: 503 }
+      }
       if (axios.isAxiosError(error)) {
         const responseData: unknown = error.response?.data
         return {
           ok: false,
-          error: typeof responseData === 'string' ? responseData : (error.message),
+          error: typeof responseData === 'string' ? responseData : error.message,
           statusCode: error.response?.status,
         }
       }
