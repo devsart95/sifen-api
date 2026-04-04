@@ -1,14 +1,14 @@
 import axios, { type AxiosInstance } from 'axios'
 import * as fs from 'node:fs'
 import * as https from 'node:https'
-import { SIFEN_ENDPOINTS, SOAP_NAMESPACE, LIMITES } from '../../config/constants.js'
+import { SIFEN_ENDPOINTS, SIFEN_NAMESPACE, SOAP_NAMESPACE, LIMITES } from '../../config/constants.js'
 import { env } from '../../config/env.js'
 
 export type SifenAmbiente = 'test' | 'produccion'
 
 export interface SoapResponse {
   ok: boolean
-  data?: string       // XML de respuesta
+  data?: string       // XML de respuesta SIFEN
   error?: string
   statusCode?: number
 }
@@ -16,6 +16,7 @@ export interface SoapResponse {
 /**
  * Cliente SOAP para SIFEN con mTLS.
  * Cada instancia carga el certificado PKCS#12 del contribuyente.
+ * La autenticación ocurre en la capa TLS (no hay API key ni Bearer token).
  */
 export class SifenSoapClient {
   private readonly http: AxiosInstance
@@ -29,10 +30,11 @@ export class SifenSoapClient {
     const httpsAgent = new https.Agent({
       pfx: pfxBuffer,
       passphrase: env.SIFEN_CERT_PASS,
+      // En homologación los certs de prueba pueden ser autofirmados
       rejectUnauthorized: ambiente === 'produccion',
     })
 
-    this.http = axios.create({
+    this.http = axios.create<string>({
       baseURL: this.endpoints.base,
       httpsAgent,
       timeout: LIMITES.TIMEOUT_SOAP_MS,
@@ -40,6 +42,8 @@ export class SifenSoapClient {
         'Content-Type': 'application/xml; charset=utf-8',
         'Accept': 'application/xml',
       },
+      // Forzar respuesta como texto (SIFEN devuelve XML, no JSON)
+      responseType: 'text',
     })
   }
 
@@ -52,8 +56,14 @@ export class SifenSoapClient {
     return this.post(this.endpoints.recepcion, body)
   }
 
-  /** Envía un lote de DEs de forma asíncrona (hasta 50) */
+  /** Envía un lote de DEs de forma asíncrona (hasta 50 documentos) */
   async recibirLote(xmlsDe: string[], idLote = 1): Promise<SoapResponse> {
+    if (xmlsDe.length === 0 || xmlsDe.length > LIMITES.MAX_DES_POR_LOTE) {
+      return {
+        ok: false,
+        error: `El lote debe contener entre 1 y ${LIMITES.MAX_DES_POR_LOTE} documentos`,
+      }
+    }
     const deElements = xmlsDe.map((xml) => `<xDE>${xml}</xDE>`).join('')
     const body = this.buildSoapEnvelope('rEnvioLote', {
       dId: idLote,
@@ -72,7 +82,7 @@ export class SifenSoapClient {
     return this.post(this.endpoints.consultaCdc, body)
   }
 
-  /** Consulta el estado de un lote por número de protocolo */
+  /** Consulta el estado de un lote por número de protocolo SIFEN */
   async consultarLote(nroProtocolo: string, idConsulta = 1): Promise<SoapResponse> {
     const body = this.buildSoapEnvelope('rEnviConsLoteDe', {
       dId: idConsulta,
@@ -81,33 +91,39 @@ export class SifenSoapClient {
     return this.post(this.endpoints.consultaLote, body)
   }
 
-  /** Consulta datos de un contribuyente por RUC */
-  async consultarRuc(ruc: string, idConsulta = 1): Promise<SoapResponse> {
+  /** Consulta datos de un contribuyente por RUC (sin DV) */
+  async consultarRuc(rucSinDv: string, idConsulta = 1): Promise<SoapResponse> {
     const body = this.buildSoapEnvelope('rEnviConsRUC', {
       dId: idConsulta,
-      dRuc: ruc,
+      dRuc: rucSinDv,
     })
     return this.post(this.endpoints.consultaRuc, body)
   }
 
-  /** Envía un evento (cancelación, inutilización, conformidad, etc.) */
-  async recibirEvento(xmlEvento: string, idEnvio = 1): Promise<SoapResponse> {
+  /** Envía un evento firmado (cancelación, inutilización, conformidad, etc.) */
+  async recibirEvento(xmlEventoFirmado: string, idEnvio = 1): Promise<SoapResponse> {
     const body = this.buildSoapEnvelope('rEnviEventoDe', {
       dId: idEnvio,
-      xEvento: xmlEvento,
+      xEvento: xmlEventoFirmado,
     })
     return this.post(this.endpoints.eventos, body)
   }
 
   private async post(endpoint: string, body: string): Promise<SoapResponse> {
     try {
-      const response = await this.http.post(endpoint, body)
-      return { ok: true, data: response.data as string, statusCode: response.status }
+      const response = await this.http.post<string>(endpoint, body)
+      const data: unknown = response.data
+      return {
+        ok: true,
+        data: typeof data === 'string' ? data : String(data),
+        statusCode: response.status,
+      }
     } catch (error) {
       if (axios.isAxiosError(error)) {
+        const responseData: unknown = error.response?.data
         return {
           ok: false,
-          error: error.response?.data as string ?? error.message,
+          error: typeof responseData === 'string' ? responseData : (error.message),
           statusCode: error.response?.status,
         }
       }
@@ -116,7 +132,7 @@ export class SifenSoapClient {
   }
 
   private buildSoapEnvelope(action: string, params: Record<string, unknown>): string {
-    const ns = 'http://ekuatia.set.gov.py/sifen/xsd'
+    // Usar SIFEN_NAMESPACE de constants.ts (no hardcodeado)
     const innerXml = Object.entries(params)
       .map(([key, val]) => `<${key}>${String(val)}</${key}>`)
       .join('')
@@ -125,7 +141,7 @@ export class SifenSoapClient {
       `<env:Envelope xmlns:env="${SOAP_NAMESPACE}">`,
       '  <env:Header/>',
       '  <env:Body>',
-      `    <${action} xmlns="${ns}">`,
+      `    <${action} xmlns="${SIFEN_NAMESPACE}">`,
       `      ${innerXml}`,
       `    </${action}>`,
       '  </env:Body>',

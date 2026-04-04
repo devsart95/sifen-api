@@ -1,19 +1,20 @@
 import { TIPO_EMISION } from '../../config/constants.js'
+import { formatearFechaCdc } from '../../utils/date.js'
 
 export interface DatosCdc {
-  tipoDocumento: number          // iTiDE 1-9
-  rucEmisor: string              // sin DV, sin guión, 8 chars con padding
-  establecimiento: string        // 3 dígitos
-  puntoExpedicion: string        // 3 dígitos
-  numero: number                 // número correlativo del DE
-  fecha: Date                    // fecha de emisión
-  tipoEmision?: 1 | 2            // 1=Normal, 2=Contingencia
-  codigoSeguridad?: string       // 9 dígitos aleatorios (se genera si no se provee)
+  tipoDocumento: number    // iTiDE 1-9
+  rucEmisor: string        // sin DV, sin guión (hasta 8 dígitos)
+  establecimiento: string  // 3 dígitos
+  puntoExpedicion: string  // 3 dígitos
+  numero: number           // número correlativo del DE
+  fecha: Date              // fecha de emisión
+  tipoEmision?: 1 | 2      // 1=Normal (default), 2=Contingencia
+  codigoSeguridad?: string // 9 dígitos aleatorios (se genera si no se provee)
 }
 
 /**
  * Genera el CDC (Código de Control) de 44 caracteres.
- * Estructura: 01 + RUC(8) + EST(3) + PUN(3) + TIPO(2) + NUM(7) + FECHA(8) + TIPOEMI(2) + SEG(9) + DV(1)
+ * Estructura: 01(2) + RUC(8) + EST(3) + PUN(3) + TIPO(2) + NUM(7) + FECHA(8) + TIPOEMI(2) + SEG(9) + DV(1)
  */
 export function generarCdc(datos: DatosCdc): string {
   const ruc = datos.rucEmisor.replace(/\D/g, '').padStart(8, '0')
@@ -28,7 +29,10 @@ export function generarCdc(datos: DatosCdc): string {
   const cdcSinDv = `01${ruc}${est}${pun}${tipo}${num}${fecha}${tipoEmi}${seg}`
 
   if (cdcSinDv.length !== 43) {
-    throw new Error(`CDC inválido: longitud ${cdcSinDv.length}, se esperaban 43 chars (sin DV)`)
+    throw new Error(
+      `CDC inválido: longitud ${cdcSinDv.length}, se esperaban 43 chars (sin DV). ` +
+        `Verificar que RUC tenga ≤8 dígitos y código de seguridad tenga 9 dígitos.`,
+    )
   }
 
   const dv = calcularDvCdc(cdcSinDv)
@@ -36,7 +40,8 @@ export function generarCdc(datos: DatosCdc): string {
 }
 
 /**
- * Calcula el dígito verificador del CDC (módulo 11).
+ * Calcula el dígito verificador del CDC usando módulo 11.
+ * Los multiplicadores rotan entre 2-9 desde la derecha.
  */
 export function calcularDvCdc(cdcSinDv: string): number {
   const MULTIPLICADORES = [2, 3, 4, 5, 6, 7, 8, 9]
@@ -51,12 +56,14 @@ export function calcularDvCdc(cdcSinDv: string): number {
   const resto = suma % 11
   const dv = 11 - resto
 
+  // Si el resultado es 10 u 11, el DV es 0 (según especificación SET)
   if (dv >= 10) return 0
   return dv
 }
 
 /**
- * Valida que un CDC tenga estructura y DV correctos.
+ * Valida que un CDC tenga estructura correcta y DV consistente.
+ * No verifica que exista en SIFEN, solo la integridad matemática.
  */
 export function validarCdc(cdc: string): boolean {
   if (cdc.length !== 44) return false
@@ -70,16 +77,8 @@ export function validarCdc(cdc: string): boolean {
   return dvEsperado === dvActual
 }
 
-/** Genera 9 dígitos aleatorios para el código de seguridad */
+/** Genera 9 dígitos aleatorios para el código de seguridad del CDC */
 function generarCodigoSeguridad(): string {
   const seg = Math.floor(Math.random() * 1_000_000_000)
   return String(seg).padStart(9, '0')
-}
-
-/** Formatea fecha como YYYYMMDD para el CDC */
-function formatearFechaCdc(fecha: Date): string {
-  const y = fecha.getFullYear()
-  const m = String(fecha.getMonth() + 1).padStart(2, '0')
-  const d = String(fecha.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
 }

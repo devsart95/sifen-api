@@ -10,7 +10,7 @@ dist/
 certs/
 coverage/
 .nyc_output/
-prisma/migrations/
+# prisma/migrations/ — NO ignorar, las migraciones van al repo
 *.log
 .DS_Store
 .turbo/

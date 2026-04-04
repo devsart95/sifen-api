@@ -126,6 +126,8 @@ export const EmitirDeSchema = z.object({
 })
 
 export type EmitirDeInput = z.infer<typeof EmitirDeSchema>
+export type TimbradoInput = z.infer<typeof TimbradoSchema>
 export type Item = z.infer<typeof ItemSchema>
 export type Emisor = z.infer<typeof EmisorSchema>
 export type Receptor = z.infer<typeof ReceptorSchema>
+export type Pago = z.infer<typeof PagoSchema>

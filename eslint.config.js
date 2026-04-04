@@ -5,32 +5,56 @@ export default tseslint.config(
   ...tseslint.configs.strictTypeChecked,
   eslintConfigPrettier,
   {
+    // src/: typecheck completo con project service
+    files: ['src/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,
         tsconfigRootDir: import.meta.dirname,
+        project: './tsconfig.json',
       },
     },
     rules: {
-      // Prohibir any explícito
       '@typescript-eslint/no-explicit-any': 'error',
-      // Forzar manejo de promesas
       '@typescript-eslint/no-floating-promises': 'error',
-      // Prohibir console.log en src (usar el logger de Fastify)
       'no-console': ['warn', { allow: ['error', 'warn'] }],
-      // Consistencia en imports
       '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      // Prohibir casts inseguros con 'as' salvo casos explícitamente comentados
+      '@typescript-eslint/no-unsafe-assignment': 'error',
+      '@typescript-eslint/no-unsafe-member-access': 'error',
+      '@typescript-eslint/no-unsafe-call': 'error',
+      '@typescript-eslint/no-unsafe-return': 'error',
     },
   },
   {
-    // Tests: reglas más relajadas
+    // tests/: mismas reglas de tipos pero más relajadas para stubs y mocks
     files: ['tests/**/*.ts'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+        project: './tsconfig.test.json',
+      },
+    },
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-floating-promises': 'warn',
       'no-console': 'off',
     },
   },
   {
-    ignores: ['dist/', 'node_modules/', 'coverage/', 'prisma/migrations/'],
+    ignores: [
+      'dist/',
+      'node_modules/',
+      'coverage/',
+      'prisma/migrations/',
+      'tsup.config.ts',
+      'vitest*.config.ts',
+      'eslint.config.js',
+    ],
   },
 )

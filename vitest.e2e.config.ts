@@ -5,10 +5,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/e2e/**/*.test.ts'],
-    timeout: 60_000,  // SIFEN puede demorar
-    testTimeout: 60_000,
+    testTimeout: 60_000,   // SIFEN puede demorar
     hookTimeout: 30_000,
-    // E2E requiere variables de entorno reales y cert de homologación
     setupFiles: ['tests/e2e/setup.ts'],
   },
 })

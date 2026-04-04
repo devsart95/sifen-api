@@ -38,3 +38,4 @@ export const EventoSchema = z.discriminatedUnion('tipo', [
 export type EventoInput = z.infer<typeof EventoSchema>
 export type CancelacionInput = z.infer<typeof CancelacionSchema>
 export type InutilizacionInput = z.infer<typeof InutilizacionSchema>
+export type ConformidadInput = z.infer<typeof ConformidadSchema>

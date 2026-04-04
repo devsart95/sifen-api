@@ -1,5 +1,5 @@
 import { QR_BASE_URL, VERSION_FORMATO } from '../../config/constants.js'
-import { calcularDvCdc } from './cdc.js'
+import { formatearFechaQr as _formatearFechaQr } from '../../utils/date.js'
 
 export interface DatosQr {
   cdc: string
@@ -8,31 +8,36 @@ export interface DatosQr {
   totalBruto: number
   totalIva: number
   fechaEmision: Date
-  tipoContribuyente: 1 | 2  // 1=Física, 2=Jurídica
-  esCfe?: boolean            // Comprobante de Facturación Electrónica
+  cantidadItems: number    // número real de ítems del DE
+  digestValue?: string     // hash SHA256 del XML firmado (disponible post-firma)
+  idCsc?: string           // ID del código de seguridad del contribuyente (default '0001')
 }
 
 /**
  * Construye la URL del QR que va embebida en el XML del DE (gCamFuFD.dCarQR).
  * Formato oficial según Manual Técnico SIFEN v150.
+ *
+ * Nota de flujo: si `digestValue` no está disponible aún (pre-firma),
+ * pasar la URL sin DigestValue y completarla después de firmar el XML.
  */
 export function construirUrlQr(datos: DatosQr): string {
   const params = new URLSearchParams({
     nVersion: VERSION_FORMATO,
     Id: datos.cdc,
-    dFeEmiDE: formatearFechaQr(datos.fechaEmision),
+    dFeEmiDE: _formatearFechaQr(datos.fechaEmision),
     dRucRec: `${datos.rucEmisor}-${datos.dvEmisor}`,
     dTotGralOpe: String(datos.totalBruto),
     dTotIVA: String(datos.totalIva),
-    cItems: String(calcularDvCdc(datos.cdc.slice(0, 43))),
-    DigestValue: '',  // Se completa después de firmar
-    IdCSC: '0001',    // ID del código de seguridad del contribuyente
+    cItems: String(datos.cantidadItems),
+    IdCSC: datos.idCsc ?? '0001',
   })
+
+  if (datos.digestValue) {
+    params.set('DigestValue', datos.digestValue)
+  }
 
   return `${QR_BASE_URL}?${params.toString()}`
 }
 
-/** Formatea fecha ISO 8601 para el QR */
-function formatearFechaQr(fecha: Date): string {
-  return fecha.toISOString().replace('T', ' ').slice(0, 19)
-}
+/** Re-export para compatibilidad con tests directos sobre este módulo */
+export { formatearFechaQr } from '../../utils/date.js'
