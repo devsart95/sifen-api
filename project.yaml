@@ -1,0 +1,34 @@
+name: sifen-api
+description: REST API gateway para SIFEN Paraguay — facturación electrónica sin SOAP
+type: api
+visibility: public
+owner: devsar
+status: development
+
+stack:
+  runtime: node-20-lts
+  language: typescript-5
+  framework: fastify-5
+  db: postgresql-16
+  orm: prisma
+  queue: bullmq
+  cache: redis
+  testing: vitest
+  container: docker-compose
+
+repo:
+  github: devsar/sifen-api
+  branch_default: main
+  branch_dev: develop
+
+domains:
+  - facturacion-electronica
+  - paraguay
+  - sifen
+  - set
+
+environments:
+  dev:
+    compose: docker-compose.yml
+  prod:
+    compose: docker-compose.prod.yml

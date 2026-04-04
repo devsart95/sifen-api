@@ -1,0 +1,64 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: deps
+    command: pnpm dev
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      HOST: 0.0.0.0
+      SIFEN_AMBIENTE: test
+      SIFEN_CERT_PATH: /certs/cert.p12
+      SIFEN_CERT_PASS: ${SIFEN_CERT_PASS}
+      DATABASE_URL: postgresql://sifen:sifen123@db:5432/sifen_api
+      REDIS_URL: redis://redis:6379
+      API_KEY_SECRET: ${API_KEY_SECRET:-dev-secret-32-chars-minimum-here}
+      RATE_LIMIT_MAX: 1000
+    volumes:
+      - ..:/app
+      - /app/node_modules
+      - ${SIFEN_CERT_DIR:-./certs}:/certs:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sifen
+      POSTGRES_PASSWORD: sifen123
+      POSTGRES_DB: sifen_api
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sifen -d sifen_api"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:

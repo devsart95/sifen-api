@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+certs/
+coverage/
+.nyc_output/
+*.log
+.DS_Store
+tests/
+docker/
+.github/

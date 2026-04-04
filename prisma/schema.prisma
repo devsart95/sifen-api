@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-tenant ──────────────────────────────────────────────────────────────
+
+model Tenant {
+  id          String   @id @default(cuid())
+  nombre      String
+  ruc         String   @unique
+  dvRuc       String   @map("dv_ruc")
+  activo      Boolean  @default(true)
+  creadoEn    DateTime @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  apiKeys       ApiKey[]
+  timbrados     Timbrado[]
+  documentos    DocumentoElectronico[]
+  eventos       EventoElectronico[]
+
+  @@map("tenants")
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  hash      String   @unique  // bcrypt hash — NUNCA guardar el key en texto plano
+  nombre    String            // descripción/etiqueta del key
+  activa    Boolean  @default(true)
+  ultimoUso DateTime? @map("ultimo_uso")
+  creadaEn  DateTime @default(now()) @map("creada_en")
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@map("api_keys")
+}
+
+// ─── Timbrado ─────────────────────────────────────────────────────────────────
+
+model Timbrado {
+  id              String   @id @default(cuid())
+  tenantId        String   @map("tenant_id")
+  numero          String   // 8 dígitos
+  establecimiento String   // 3 dígitos
+  puntoExpedicion String   @map("punto_expedicion")
+  tipoDocumento   Int      @map("tipo_documento")
+  fechaInicio     DateTime @map("fecha_inicio")
+  activo          Boolean  @default(true)
+  creadoEn        DateTime @default(now()) @map("creado_en")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  documentos      DocumentoElectronico[]
+
+  @@unique([tenantId, numero, establecimiento, puntoExpedicion, tipoDocumento])
+  @@map("timbrados")
+}
+
+// ─── Documento Electrónico ───────────────────────────────────────────────────
+
+enum EstadoDE {
+  PENDIENTE
+  ENVIADO
+  APROBADO
+  RECHAZADO
+  CANCELADO
+  INUTILIZADO
+  ERROR
+}
+
+model DocumentoElectronico {
+  id              String   @id @default(cuid())
+  tenantId        String   @map("tenant_id")
+  timbradoId      String   @map("timbrado_id")
+  cdc             String   @unique
+  numero          Int
+  tipoDocumento   Int      @map("tipo_documento")
+  tipoEmision     Int      @default(1) @map("tipo_emision")
+  estado          EstadoDE @default(PENDIENTE)
+
+  // Receptor
+  receptorRuc     String?  @map("receptor_ruc")
+  receptorNombre  String   @map("receptor_nombre")
+
+  // Totales
+  moneda          String   @default("PYG")
+  totalBruto      Int      @map("total_bruto")
+  totalIva        Int      @map("total_iva")
+
+  // XML y respuesta SIFEN
+  xmlFirmado      String?  @map("xml_firmado") @db.Text
+  xmlRespuesta    String?  @map("xml_respuesta") @db.Text
+  nroProtocolo    String?  @map("nro_protocolo")
+
+  // Fechas
+  fechaEmision    DateTime @map("fecha_emision")
+  fechaAprobacion DateTime? @map("fecha_aprobacion")
+  creadoEn        DateTime @default(now()) @map("creado_en")
+  actualizadoEn   DateTime @updatedAt @map("actualizado_en")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  timbrado        Timbrado @relation(fields: [timbradoId], references: [id])
+  eventos         EventoElectronico[]
+
+  @@index([tenantId, estado])
+  @@index([tenantId, fechaEmision])
+  @@map("documentos_electronicos")
+}
+
+// ─── Eventos ─────────────────────────────────────────────────────────────────
+
+model EventoElectronico {
+  id            String   @id @default(cuid())
+  tenantId      String   @map("tenant_id")
+  documentoId   String?  @map("documento_id")
+  tipoEvento    Int      @map("tipo_evento")
+  estado        EstadoDE @default(PENDIENTE)
+  motivo        String?
+
+  xmlEvento     String?  @map("xml_evento") @db.Text
+  xmlRespuesta  String?  @map("xml_respuesta") @db.Text
+
+  creadoEn      DateTime @default(now()) @map("creado_en")
+  actualizadoEn DateTime @updatedAt @map("actualizado_en")
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id])
+  documento     DocumentoElectronico? @relation(fields: [documentoId], references: [id])
+
+  @@index([tenantId, tipoEvento])
+  @@map("eventos_electronicos")
+}
