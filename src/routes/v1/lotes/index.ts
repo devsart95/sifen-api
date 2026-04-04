@@ -1,3 +1,4 @@
+import * as fs from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import { z } from 'zod'
@@ -7,8 +8,10 @@ import { firmarXmlDe } from '../../../services/xml/signer.js'
 import { loteDeQueue } from '../../../services/queue/bull.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { LIMITES } from '../../../config/constants.js'
-import * as fs from 'node:fs'
 import { env } from '../../../config/env.js'
+
+// Certificado leído una sola vez al inicio del módulo (C1)
+const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
 
 const LoteSchema = z.object({
   documentos: z
@@ -45,14 +48,12 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
       const { documentos } = LoteSchema.parse(request.body)
       const tenantId = request.tenantId
 
-      const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
-
       // Generar y firmar todos los XMLs
       const xmlsFirmados: string[] = []
       const cdcs: string[] = []
 
       for (const input of documentos) {
-        const { xml, cdc } = generarXmlDe(input)
+        const { xml, cdc } = generarXmlDe(input, cdcs.length + 1)
         const { xmlFirmado } = firmarXmlDe(xml, {
           p12Buffer,
           passphrase: env.SIFEN_CERT_PASS,
@@ -68,6 +69,7 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
           tenantId,
           loteId: `lote-${Date.now()}`,
           xmlsDe: xmlsFirmados,
+          cdcs,
           idLote: Math.floor(Math.random() * 100_000),
         },
         { priority: 1 },
@@ -116,6 +118,15 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
 
       const job = await loteDeQueue.getJob(jobId)
       if (!job) {
+        return reply.status(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `No se encontró el job con ID: ${jobId}`,
+        })
+      }
+
+      // Verificar que el job pertenece al tenant autenticado (M3)
+      if (job.data.tenantId !== request.tenantId) {
         return reply.status(404).send({
           statusCode: 404,
           error: 'Not Found',

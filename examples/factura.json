@@ -1,0 +1,55 @@
+{
+  "tipoDocumento": 1,
+  "tipoEmision": 1,
+  "tipoImpuesto": 1,
+  "moneda": "PYG",
+  "timbrado": {
+    "numero": "12345678",
+    "establecimiento": "001",
+    "puntoExpedicion": "001",
+    "fechaInicio": "2024-01-01"
+  },
+  "emisor": {
+    "ruc": "80069563",
+    "dvRuc": "1",
+    "tipoContribuyente": 2,
+    "razonSocial": "EMPRESA DE PRUEBA S.A.",
+    "nombreFantasia": "EMPRESA PRUEBA",
+    "direccion": "Av. España 1234",
+    "numeroCasa": "1234",
+    "departamento": 11,
+    "distrito": 145,
+    "ciudad": 1,
+    "telefono": "021-000000",
+    "email": "facturacion@empresa.com.py",
+    "actividadEconomica": "4619"
+  },
+  "receptor": {
+    "tipoDocumento": 1,
+    "documento": "12345678",
+    "dvDocumento": "9",
+    "razonSocial": "CLIENTE DE PRUEBA",
+    "tipoContribuyente": 2,
+    "tipoOperacion": 1,
+    "pais": "PY",
+    "email": "cliente@ejemplo.com"
+  },
+  "pago": {
+    "tipo": 1,
+    "medioPago": 1,
+    "montoEntrega": 110000
+  },
+  "indicadorPresencia": 1,
+  "items": [
+    {
+      "descripcion": "Servicio de desarrollo de software",
+      "cantidad": 1,
+      "precioUnitario": 100000,
+      "descuento": 0,
+      "anticipo": 0,
+      "afecIva": 1,
+      "tasaIva": 10,
+      "unidadMedida": 77
+    }
+  ]
+}

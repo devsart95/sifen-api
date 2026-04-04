@@ -1,3 +1,4 @@
+import * as fs from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import type { SifenSoapClient } from '../../../services/sifen/soap.client.js'
@@ -6,8 +7,10 @@ import { firmarXmlDe } from '../../../services/xml/signer.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { SIFEN_NAMESPACE, TIPO_EVENTO } from '../../../config/constants.js'
 import { formatearFechaXml } from '../../../utils/date.js'
-import * as fs from 'node:fs'
 import { env } from '../../../config/env.js'
+
+// Certificado leído una sola vez al inicio del módulo (C1)
+const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
 
 interface EventosRouteOptions {
   prisma: PrismaClient
@@ -45,7 +48,6 @@ export const eventosRoutes: FastifyPluginAsync<EventosRouteOptions> = async (
       const xmlEvento = generarXmlEvento(evento, tenantId)
 
       // Firmar el evento con el mismo certificado del contribuyente
-      const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
       const { xmlFirmado } = firmarXmlDe(xmlEvento, {
         p12Buffer,
         passphrase: env.SIFEN_CERT_PASS,

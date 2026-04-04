@@ -17,6 +17,7 @@ export interface LoteDeJobData {
   tenantId: string
   loteId: string           // ID de registro en DB para tracking
   xmlsDe: string[]         // XMLs firmados listos para enviar
+  cdcs: string[]           // CDCs correspondientes a cada XML (mismo orden)
   idLote: number
 }
 

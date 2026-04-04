@@ -64,17 +64,28 @@ function formatGs(n: number): string {
   return new Intl.NumberFormat('es-PY').format(n)
 }
 
+/** Escapa caracteres HTML para prevenir inyección en el template (A4) */
+function esc(str: string | undefined | null): string {
+  if (!str) return ''
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export function generarHtmlKude(datos: DatosKude): string {
   const filaItems = datos.items
     .map(
       (item) => `
       <tr>
-        <td>${item.descripcion}</td>
+        <td>${esc(item.descripcion)}</td>
         <td class="center">${item.cantidad}</td>
-        <td class="center">${item.unidadMedida}</td>
+        <td class="center">${esc(item.unidadMedida)}</td>
         <td class="right">${formatGs(item.precioUnitario)}</td>
         <td class="right">${item.descuento > 0 ? formatGs(item.descuento) : '-'}</td>
-        <td class="center">${item.iva}</td>
+        <td class="center">${esc(item.iva)}</td>
         <td class="right">${formatGs(item.total)}</td>
       </tr>`,
     )
@@ -90,7 +101,7 @@ export function generarHtmlKude(datos: DatosKude): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>KuDE — ${datos.tipoDocumento} ${datos.establecimiento}-${datos.puntoExpedicion}-${datos.numero}</title>
+  <title>KuDE — ${esc(datos.tipoDocumento)} ${esc(datos.establecimiento)}-${esc(datos.puntoExpedicion)}-${esc(datos.numero)}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -282,21 +293,21 @@ export function generarHtmlKude(datos: DatosKude): string {
   <!-- ENCABEZADO -->
   <div class="header">
     <div class="header-emisor">
-      <div class="emisor-nombre">${datos.nombreEmisor}</div>
-      <div class="emisor-ruc">RUC: <strong>${datos.rucEmisor}</strong></div>
-      <div class="emisor-dato">${datos.direccionEmisor}</div>
-      ${datos.ciudadEmisor ? `<div class="emisor-dato">${datos.ciudadEmisor}</div>` : ''}
-      ${datos.telefonoEmisor ? `<div class="emisor-dato">Tel: ${datos.telefonoEmisor}</div>` : ''}
-      ${datos.emailEmisor ? `<div class="emisor-dato">${datos.emailEmisor}</div>` : ''}
-      ${datos.actividadEconomica ? `<div class="emisor-dato">Actividad: ${datos.actividadEconomica}</div>` : ''}
+      <div class="emisor-nombre">${esc(datos.nombreEmisor)}</div>
+      <div class="emisor-ruc">RUC: <strong>${esc(datos.rucEmisor)}</strong></div>
+      <div class="emisor-dato">${esc(datos.direccionEmisor)}</div>
+      ${datos.ciudadEmisor ? `<div class="emisor-dato">${esc(datos.ciudadEmisor)}</div>` : ''}
+      ${datos.telefonoEmisor ? `<div class="emisor-dato">Tel: ${esc(datos.telefonoEmisor)}</div>` : ''}
+      ${datos.emailEmisor ? `<div class="emisor-dato">${esc(datos.emailEmisor)}</div>` : ''}
+      ${datos.actividadEconomica ? `<div class="emisor-dato">Actividad: ${esc(datos.actividadEconomica)}</div>` : ''}
     </div>
     <div class="header-doc">
-      <div class="doc-tipo">${datos.tipoDocumento}</div>
-      <div class="doc-timbrado">Timbrado N°: ${datos.timbrado}</div>
-      <div class="doc-timbrado">Vigencia desde: ${datos.fechaInicio}</div>
-      <div class="doc-numero">${datos.establecimiento}-${datos.puntoExpedicion}-${datos.numero}</div>
-      <div class="doc-timbrado">Fecha: ${datos.fechaEmision}</div>
-      <div class="doc-timbrado">Moneda: ${datos.moneda}</div>
+      <div class="doc-tipo">${esc(datos.tipoDocumento)}</div>
+      <div class="doc-timbrado">Timbrado N°: ${esc(datos.timbrado)}</div>
+      <div class="doc-timbrado">Vigencia desde: ${esc(datos.fechaInicio)}</div>
+      <div class="doc-numero">${esc(datos.establecimiento)}-${esc(datos.puntoExpedicion)}-${esc(datos.numero)}</div>
+      <div class="doc-timbrado">Fecha: ${esc(datos.fechaEmision)}</div>
+      <div class="doc-timbrado">Moneda: ${esc(datos.moneda)}</div>
     </div>
   </div>
 
@@ -306,26 +317,26 @@ export function generarHtmlKude(datos: DatosKude): string {
     <div class="grid-3">
       <div class="campo">
         <div class="campo-label">Nombre / Razón Social</div>
-        <div class="campo-valor">${datos.nombreReceptor}</div>
+        <div class="campo-valor">${esc(datos.nombreReceptor)}</div>
       </div>
       ${datos.rucReceptor ? `
       <div class="campo">
         <div class="campo-label">RUC / CI</div>
-        <div class="campo-valor">${datos.rucReceptor}</div>
+        <div class="campo-valor">${esc(datos.rucReceptor)}</div>
       </div>` : ''}
       <div class="campo">
         <div class="campo-label">Condición de Pago</div>
-        <div class="campo-valor">${datos.condicionPago}</div>
+        <div class="campo-valor">${esc(datos.condicionPago)}</div>
       </div>
       ${datos.direccionReceptor ? `
       <div class="campo">
         <div class="campo-label">Dirección</div>
-        <div class="campo-valor">${datos.direccionReceptor}</div>
+        <div class="campo-valor">${esc(datos.direccionReceptor)}</div>
       </div>` : ''}
       ${datos.emailReceptor ? `
       <div class="campo">
         <div class="campo-label">Email</div>
-        <div class="campo-valor">${datos.emailReceptor}</div>
+        <div class="campo-valor">${esc(datos.emailReceptor)}</div>
       </div>` : ''}
     </div>
   </div>
@@ -395,9 +406,9 @@ export function generarHtmlKude(datos: DatosKude): string {
     </div>
     <div class="cdc-container">
       <div class="cdc-label">Código de Control (CDC)</div>
-      <div class="cdc-valor">${datos.cdc}</div>
-      ${datos.nroProtocolo ? `<div class="protocolo">Nro. Protocolo: <strong>${datos.nroProtocolo}</strong></div>` : ''}
-      <div class="footer-ambiente">Ambiente: ${datos.ambiente} — Generado con sifen-api (devsart95/sifen-api)</div>
+      <div class="cdc-valor">${esc(datos.cdc)}</div>
+      ${datos.nroProtocolo ? `<div class="protocolo">Nro. Protocolo: <strong>${esc(datos.nroProtocolo)}</strong></div>` : ''}
+      <div class="footer-ambiente">Ambiente: ${esc(datos.ambiente)} — Generado con sifen-api (devsart95/sifen-api)</div>
     </div>
   </div>
 

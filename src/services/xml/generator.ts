@@ -29,7 +29,7 @@ export interface XmlGeneratorResult {
  *  4. Construir árbol XML con xmlbuilder2
  *  5. Serializar a string
  */
-export function generarXmlDe(input: EmitirDeInput): XmlGeneratorResult {
+export function generarXmlDe(input: EmitirDeInput, numero: number): XmlGeneratorResult {
   const fechaEmision = input.fechaEmision ?? new Date()
 
   // 1. Calcular totales IVA
@@ -48,12 +48,7 @@ export function generarXmlDe(input: EmitirDeInput): XmlGeneratorResult {
     rucEmisor: input.emisor.ruc,
     establecimiento: input.timbrado.establecimiento,
     puntoExpedicion: input.timbrado.puntoExpedicion,
-    numero: parseInt(
-      // El campo numero puede ser el próximo disponible; aquí es parte del input
-      // En la ruta real se obtiene de la DB. Para testing se asume 1.
-      '1',
-      10,
-    ),
+    numero,
     fecha: fechaEmision,
     tipoEmision: input.tipoEmision,
   })

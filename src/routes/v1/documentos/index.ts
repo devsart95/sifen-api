@@ -1,3 +1,4 @@
+import * as fs from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import type { SifenSoapClient } from '../../../services/sifen/soap.client.js'
@@ -8,8 +9,10 @@ import { validarEstructuraXml } from '../../../services/xml/validator.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { calcularTotalesIva, type ItemIva } from '../../../utils/iva.js'
 import { generarKudePdf } from '../../../services/kude/generator.js'
-import * as fs from 'node:fs'
 import { env } from '../../../config/env.js'
+
+// Certificado leído una sola vez al inicio del módulo (C1)
+const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
 
 interface DocumentosRouteOptions {
   prisma: PrismaClient
@@ -73,10 +76,18 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
       }))
       const totales = calcularTotalesIva(itemsIva)
 
-      // 3. Generar XML
-      const { xml, cdc, urlQr } = generarXmlDe(input)
+      // 3. Obtener próximo número correlativo del timbrado (A1)
+      const ultimoDoc = await prisma.documentoElectronico.findFirst({
+        where: { timbradoId: timbrado.id },
+        orderBy: { numero: 'desc' },
+        select: { numero: true },
+      })
+      const numeroSiguiente = (ultimoDoc?.numero ?? 0) + 1
 
-      // 4. Validar estructura antes de firmar
+      // 4. Generar XML
+      const { xml, cdc, urlQr } = generarXmlDe(input, numeroSiguiente)
+
+      // 5. Validar estructura antes de firmar
       const validacion = validarEstructuraXml(xml)
       if (!validacion.valid) {
         return reply.status(422).send({
@@ -87,8 +98,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      // 5. Firmar con el certificado del contribuyente
-      const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
+      // 6. Firmar con el certificado del contribuyente
       const { xmlFirmado, digestValue } = firmarXmlDe(xml, {
         p12Buffer,
         passphrase: env.SIFEN_CERT_PASS,
@@ -117,8 +127,17 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         },
       })
 
-      // 8. Enviar a SIFEN
-      const respuestaSifen = await soapClient.recibirDe(xmlFirmado)
+      // 8. Enviar a SIFEN — con recovery si falla inesperadamente (C2)
+      let respuestaSifen: Awaited<ReturnType<typeof soapClient.recibirDe>>
+      try {
+        respuestaSifen = await soapClient.recibirDe(xmlFirmado)
+      } catch (err) {
+        await prisma.documentoElectronico.update({
+          where: { id: documento.id },
+          data: { estado: 'ERROR', xmlRespuesta: String(err) },
+        })
+        throw err
+      }
 
       // 9. Actualizar estado según respuesta
       const estadoFinal = respuestaSifen.ok ? 'APROBADO' : 'RECHAZADO'

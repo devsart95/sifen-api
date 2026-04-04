@@ -1,8 +1,27 @@
-import puppeteer from 'puppeteer'
+import puppeteer, { type Browser } from 'puppeteer'
 import { generarHtmlKude, type DatosKude } from './template.js'
 import { XMLParser } from 'fast-xml-parser'
 import { TIPO_DOCUMENTO, CONDICION_PAGO, AFEC_IVA } from '../../config/constants.js'
 import { env } from '../../config/env.js'
+
+// Singleton del browser — evita lanzar Chromium por cada KuDE (C4)
+let browserInstance: Browser | null = null
+
+async function getBrowser(): Promise<Browser> {
+  if (browserInstance && browserInstance.connected) return browserInstance
+  browserInstance = await puppeteer.launch({
+    headless: true,
+    executablePath: process.env['PUPPETEER_EXECUTABLE_PATH'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  })
+  browserInstance.on('disconnected', () => { browserInstance = null })
+  return browserInstance
+}
 
 export interface KudeGeneratorResult {
   pdf: Buffer
@@ -129,30 +148,18 @@ function extraerDatosDeXml(xml: string): DatosKude {
 }
 
 async function renderizarPdf(html: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env['PUPPETEER_EXECUTABLE_PATH'],
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  })
-
+  const browser = await getBrowser()
+  const page = await browser.newPage()
   try {
-    const page = await browser.newPage()
     await page.setContent(html, { waitUntil: 'networkidle0' })
-
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
       margin: { top: '0', right: '0', bottom: '0', left: '0' },
     })
-
     return Buffer.from(pdfBuffer)
   } finally {
-    await browser.close()
+    await page.close()
   }
 }
 

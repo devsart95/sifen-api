@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto'
 import { TIPO_EMISION } from '../../config/constants.js'
 import { formatearFechaCdc } from '../../utils/date.js'
 
@@ -77,8 +78,8 @@ export function validarCdc(cdc: string): boolean {
   return dvEsperado === dvActual
 }
 
-/** Genera 9 dígitos aleatorios para el código de seguridad del CDC */
+/** Genera 9 dígitos aleatorios para el código de seguridad del CDC usando crypto.randomInt */
 function generarCodigoSeguridad(): string {
-  const seg = Math.floor(Math.random() * 1_000_000_000)
+  const seg = randomInt(0, 1_000_000_000)
   return String(seg).padStart(9, '0')
 }
