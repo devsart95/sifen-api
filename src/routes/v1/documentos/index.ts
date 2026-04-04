@@ -5,8 +5,9 @@ import { EmitirDeSchema } from '../../../schemas/de.schema.js'
 import { generarXmlDe } from '../../../services/xml/generator.js'
 import { firmarXmlDe } from '../../../services/xml/signer.js'
 import { validarEstructuraXml } from '../../../services/xml/validator.js'
-import { construirUrlQr } from '../../../services/xml/qr.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
+import { calcularTotalesIva, type ItemIva } from '../../../utils/iva.js'
+import { generarKudePdf } from '../../../services/kude/generator.js'
 import * as fs from 'node:fs'
 import { env } from '../../../config/env.js'
 
@@ -62,10 +63,20 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      // 2. Generar XML
+      // 2. Calcular totales IVA para persistencia en DB
+      const itemsIva: ItemIva[] = input.items.map((item) => ({
+        precioUnitario: item.precioUnitario,
+        cantidad: item.cantidad,
+        descuento: item.descuento,
+        afecIva: item.afecIva,
+        tasaIva: item.tasaIva,
+      }))
+      const totales = calcularTotalesIva(itemsIva)
+
+      // 3. Generar XML
       const { xml, cdc, urlQr } = generarXmlDe(input)
 
-      // 3. Validar estructura antes de firmar
+      // 4. Validar estructura antes de firmar
       const validacion = validarEstructuraXml(xml)
       if (!validacion.valid) {
         return reply.status(422).send({
@@ -76,17 +87,17 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      // 4. Firmar con el certificado del contribuyente
+      // 5. Firmar con el certificado del contribuyente
       const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
       const { xmlFirmado, digestValue } = firmarXmlDe(xml, {
         p12Buffer,
         passphrase: env.SIFEN_CERT_PASS,
       })
 
-      // 5. Actualizar URL QR con el DigestValue real (post-firma)
+      // 6. Actualizar URL QR con el DigestValue real (post-firma)
       const urlQrFinal = urlQr.replace('DigestValue=&', `DigestValue=${encodeURIComponent(digestValue)}&`)
 
-      // 6. Guardar en DB con estado PENDIENTE
+      // 7. Guardar en DB con estado PENDIENTE
       const documento = await prisma.documentoElectronico.create({
         data: {
           tenantId,
@@ -99,17 +110,17 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
           receptorRuc: input.receptor.documento,
           receptorNombre: input.receptor.razonSocial,
           moneda: input.moneda,
-          totalBruto: 0, // TODO: calcular desde totales
-          totalIva: 0,
+          totalBruto: totales.totalBruto,
+          totalIva: totales.totalIva,
           xmlFirmado,
           fechaEmision: input.fechaEmision ?? new Date(),
         },
       })
 
-      // 7. Enviar a SIFEN
+      // 8. Enviar a SIFEN
       const respuestaSifen = await soapClient.recibirDe(xmlFirmado)
 
-      // 8. Actualizar estado según respuesta
+      // 9. Actualizar estado según respuesta
       const estadoFinal = respuestaSifen.ok ? 'APROBADO' : 'RECHAZADO'
       await prisma.documentoElectronico.update({
         where: { id: documento.id },
@@ -120,7 +131,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         },
       })
 
-      // 9. Audit log
+      // 10. Audit log
       await prisma.auditLog.create({
         data: {
           tenantId,
@@ -198,6 +209,59 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
           ? { consultado: true, respuesta: consultaSifen.data }
           : { consultado: false, error: consultaSifen.error },
       })
+    },
+  )
+
+  // ─── GET /v1/documentos/:cdc/kude — Descargar PDF KuDE ───────────────────
+
+  fastify.get(
+    '/:cdc/kude',
+    {
+      preHandler: authHook,
+      schema: {
+        tags: ['Documentos'],
+        summary: 'Descargar PDF KuDE del documento',
+        description:
+          'Genera y retorna el PDF del Kuatia Digital Electrónico (KuDE) ' +
+          'para impresión o envío al receptor.',
+        params: {
+          type: 'object',
+          properties: { cdc: { type: 'string', minLength: 44, maxLength: 44 } },
+          required: ['cdc'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { cdc } = request.params as { cdc: string }
+      const tenantId = request.tenantId
+
+      const documento = await prisma.documentoElectronico.findFirst({
+        where: { cdc, tenantId },
+        select: { xmlFirmado: true, estado: true },
+      })
+
+      if (!documento) {
+        return reply.status(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `No se encontró el documento con CDC: ${cdc}`,
+        })
+      }
+
+      if (!documento.xmlFirmado) {
+        return reply.status(422).send({
+          statusCode: 422,
+          error: 'XML no disponible',
+          message: 'El documento no tiene XML firmado almacenado',
+        })
+      }
+
+      const { pdf } = await generarKudePdf(documento.xmlFirmado)
+
+      return reply
+        .header('Content-Type', 'application/pdf')
+        .header('Content-Disposition', `attachment; filename="kude-${cdc}.pdf"`)
+        .send(pdf)
     },
   )
 }

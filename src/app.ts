@@ -13,7 +13,12 @@ import { eventosRoutes } from './routes/v1/eventos/index.js'
 import { consultasRoutes } from './routes/v1/consultas/index.js'
 import { lotesRoutes } from './routes/v1/lotes/index.js'
 
-export async function buildApp() {
+export interface AppDeps {
+  prisma?: PrismaClient
+  soapClient?: SifenSoapClient
+}
+
+export async function buildApp(deps: AppDeps = {}) {
   const app = Fastify({
     logger: {
       level: env.NODE_ENV === 'test' ? 'silent' : 'info',
@@ -24,9 +29,9 @@ export async function buildApp() {
     },
   })
 
-  // Dependencias compartidas
-  const prisma = new PrismaClient()
-  const soapClient = new SifenSoapClient(env.SIFEN_AMBIENTE)
+  // Dependencias — inyectables para tests, instanciadas por defecto en producción
+  const prisma = deps.prisma ?? new PrismaClient()
+  const soapClient = deps.soapClient ?? new SifenSoapClient(env.SIFEN_AMBIENTE)
 
   // Seguridad
   await app.register(helmet, {
@@ -95,7 +100,7 @@ export async function buildApp() {
   // Error handler global
   app.setErrorHandler(errorHandler)
 
-  // Graceful shutdown — desconectar Prisma al cerrar
+  // Graceful shutdown
   app.addHook('onClose', async () => {
     await prisma.$disconnect()
   })
@@ -129,25 +134,10 @@ export async function buildApp() {
   // Routes v1
   await app.register(
     async (v1) => {
-      await v1.register(documentosRoutes, {
-        prefix: '/documentos',
-        prisma,
-        soapClient,
-      })
-      await v1.register(eventosRoutes, {
-        prefix: '/eventos',
-        prisma,
-        soapClient,
-      })
-      await v1.register(consultasRoutes, {
-        prefix: '/consultas',
-        prisma,
-        soapClient,
-      })
-      await v1.register(lotesRoutes, {
-        prefix: '/lotes',
-        prisma,
-      })
+      await v1.register(documentosRoutes, { prefix: '/documentos', prisma, soapClient })
+      await v1.register(eventosRoutes, { prefix: '/eventos', prisma, soapClient })
+      await v1.register(consultasRoutes, { prefix: '/consultas', prisma, soapClient })
+      await v1.register(lotesRoutes, { prefix: '/lotes', prisma })
     },
     { prefix: '/v1' },
   )

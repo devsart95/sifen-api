@@ -1,39 +1,40 @@
 # CONTEXT — sifen-api
 
 ## Estado actual
-Base funcional completa. Todos los módulos core implementados y con tests.
-Listo para instalar dependencias, correr migraciones y probar contra SIFEN homologación.
+Implementación completa. Todos los módulos del CLAUDE.md están implementados.
+Pendiente: instalar dependencias (`pnpm install`), primera migración y probar contra SIFEN homologación.
 
 ## Completado
-- [x] Configuración base: tsconfig, eslint, prettier, vitest, tsup, docker
-- [x] Constantes SIFEN v150, validación de env con Zod
-- [x] Utils: RUC (módulo 11), IVA (10%/5%/exento/exonerado), Date (4 formatos)
-- [x] Servicios XML: CDC (44 chars, módulo 11), QR URL, generator, signer (XMLDSig RSA-SHA256), validator
-- [x] Cliente SOAP con mTLS — todos los endpoints SIFEN (test/prod)
-- [x] Schemas Zod: DE completo (todos los tipos), eventos (cancelación, inutilización, conformidad)
+- [x] Configuración: tsconfig (src + test), eslint, vitest, tsup, docker dev/prod
+- [x] Utils: RUC, IVA, Date (4 formatos centralizados)
+- [x] Servicios XML: CDC, QR, generator (v150 completo), signer (XMLDSig RSA-SHA256), validator
+- [x] Cliente SOAP con mTLS — todos los endpoints SIFEN
+- [x] Schemas Zod: DE (todos los tipos), eventos, con tipos exportados completos
 - [x] Prisma schema: Tenant, ApiKey, Timbrado, DocumentoElectronico, EventoElectronico, AuditLog
-- [x] Middleware: auth (API key + SHA-256), error handler global
-- [x] Routes v1: /documentos (emitir + consultar), /eventos, /consultas/ruc, /lotes (BullMQ)
-- [x] BullMQ: colas lote-de + kude-pdf, worker procesador de lotes
-- [x] Tests unitarios: RUC, IVA, IVA-edge, CDC, QR, validator, date (7 archivos, ~80 casos)
-- [x] CI GitHub Actions corregido (migraciones condicionales, typecheck src+tests)
-- [x] Prisma seed con tenant + API key + timbrado de prueba
+- [x] Middleware: auth (API key SHA-256, tenantId), error handler global
+- [x] Routes v1: documentos (POST emitir, GET consultar, GET kude PDF), eventos, consultas, lotes
+- [x] KuDE: template HTML oficial A4 + generator puppeteer + worker background
+- [x] BullMQ: colas lote-de + kude-pdf con retry exponencial, workers procesadores
+- [x] Tests unitarios: RUC, IVA, IVA-edge, CDC, QR, validator, date (~80 casos)
+- [x] Tests integración: health, documentos (emitir/consultar/auth/aislamiento), eventos, consultas
+- [x] CI desactivado (reactivar con `gh workflow enable CI`)
+- [x] docker-compose.prod.yml con resources limits, workers separados, volúmenes
+- [x] release.yml: tag → ghcr.io + GitHub Release con changelog automático
+- [x] Prisma seed: tenant + API key + timbrado de prueba
+- [x] buildApp inyectable (deps opcionales para testing sin mocks globales)
 
-## Pendiente
-- [ ] `pnpm install` (lockfile aún no generado)
-- [ ] Primera migración Prisma: `pnpm db:migrate`
-- [ ] Tests de integración: rutas con DB real (tests/integration/)
-- [ ] Tests E2E: contra SIFEN homologación con cert real (tests/e2e/)
-- [ ] Servicio KuDE: generación PDF (puppeteer + plantilla HTML)
-- [ ] Worker kude.worker.ts
-- [ ] docker-compose.prod.yml
-- [ ] workflow release.yml (tag → Docker Hub)
-- [ ] Elevar coverage thresholds a 80% cuando integración y KuDE tengan tests
+## Pendiente inmediato
+- [ ] `pnpm install` → generar lockfile
+- [ ] `pnpm db:migrate` → primera migración Prisma
+- [ ] Reactivar CI cuando el proyecto esté listo para PR workflow
+- [ ] README oficial (auditoría de info pública + documentación de uso)
+- [ ] Elevar coverage thresholds a 80% después de primera ejecución real de tests
 
 ## Arquitectura de decisiones clave
-- REST sobre SOAP: cualquier lenguaje puede integrar sin librerías SOAP
-- Multi-tenant por API key (SHA-256 hash en DB, no texto plano)
-- Lotes asíncronos con BullMQ para no bloquear el hilo principal
-- Firma XMLDSig con node-forge (sin binarios nativos)
-- Prisma para audit trail completo con enum TipoAccion tipado
-- Validación estructural propia (sin XSD nativo) + validación real vía SIFEN homologación
+- REST sobre SOAP: cualquier lenguaje integra sin librerías SOAP específicas
+- Multi-tenant: cada empresa tiene su propia API key y certificado
+- buildApp acepta deps inyectables → tests de integración sin mocks globales frágiles
+- Firma XMLDSig con node-forge (sin binarios nativos — portabilidad total)
+- Validación estructural propia + validación real vía respuesta SIFEN
+- Lotes asíncronos BullMQ: 202 Accepted inmediato, procesamiento en background
+- KuDE generado on-demand por ruta HTTP o en background por worker

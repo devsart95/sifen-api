@@ -1,0 +1,135 @@
+services:
+  api:
+    image: ${DOCKER_IMAGE:-ghcr.io/devsart95/sifen-api}:${APP_VERSION:-latest}
+    restart: always
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      SIFEN_AMBIENTE: ${SIFEN_AMBIENTE:-produccion}
+      SIFEN_CERT_PATH: /certs/cert.p12
+      SIFEN_CERT_PASS: ${SIFEN_CERT_PASS}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      API_KEY_SECRET: ${API_KEY_SECRET}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1 minute}
+      KUDE_OUTPUT_DIR: /app/kude
+    volumes:
+      - ${SIFEN_CERT_DIR}:/certs:ro       # certificado PKCS#12 del contribuyente
+      - kude_pdfs:/app/kude               # PDFs KuDE generados
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Worker de lotes — instancia separada del mismo servicio
+  worker:
+    image: ${DOCKER_IMAGE:-ghcr.io/devsart95/sifen-api}:${APP_VERSION:-latest}
+    restart: always
+    command: node dist/worker.js
+    environment:
+      NODE_ENV: production
+      SIFEN_AMBIENTE: ${SIFEN_AMBIENTE:-produccion}
+      SIFEN_CERT_PATH: /certs/cert.p12
+      SIFEN_CERT_PASS: ${SIFEN_CERT_PASS}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      API_KEY_SECRET: ${API_KEY_SECRET}
+      KUDE_OUTPUT_DIR: /app/kude
+    volumes:
+      - ${SIFEN_CERT_DIR}:/certs:ro
+      - kude_pdfs:/app/kude
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M   # puppeteer para KuDE usa más memoria
+        reservations:
+          memory: 384M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-sifen}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-sifen_api}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sifen} -d ${DB_NAME:-sifen_api}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 192M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  pg_data:
+    driver: local
+  redis_data:
+    driver: local
+  kude_pdfs:
+    driver: local
