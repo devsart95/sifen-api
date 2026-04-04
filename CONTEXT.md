@@ -1,8 +1,8 @@
 # CONTEXT — sifen-api
 
 ## Estado actual
-Implementación completa. Todos los módulos del CLAUDE.md están implementados.
-Pendiente: instalar dependencias (`pnpm install`), primera migración y probar contra SIFEN homologación.
+Implementación completa + bugs críticos corregidos. Listo para primera prueba contra SIFEN homologación.
+Pendiente: `pnpm install` → `pnpm db:migrate` → configurar certificado y probar.
 
 ## Completado
 - [x] Configuración: tsconfig (src + test), eslint, vitest, tsup, docker dev/prod
@@ -27,8 +27,8 @@ Pendiente: instalar dependencias (`pnpm install`), primera migración y probar c
 - [ ] `pnpm install` → generar lockfile
 - [ ] `pnpm db:migrate` → primera migración Prisma
 - [ ] Reactivar CI cuando el proyecto esté listo para PR workflow
-- [ ] README oficial (auditoría de info pública + documentación de uso)
 - [ ] Elevar coverage thresholds a 80% después de primera ejecución real de tests
+- [ ] Probar flujo completo contra SIFEN homologación con cert real
 
 ## Arquitectura de decisiones clave
 - REST sobre SOAP: cualquier lenguaje integra sin librerías SOAP específicas
