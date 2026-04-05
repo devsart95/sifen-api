@@ -19,7 +19,7 @@ async function main() {
 
   console.log(`Tenant: ${tenant.nombre} (${tenant.ruc}-${tenant.dvRuc})`)
 
-  // API key de prueba
+  // API key de prueba (acceso normal)
   const rawKey = 'test-api-key-32-chars-minimum-here'
   const apiKey = await prisma.apiKey.upsert({
     where: { hash: hashApiKey(rawKey) },
@@ -28,18 +28,37 @@ async function main() {
       tenantId: tenant.id,
       hash: hashApiKey(rawKey),
       nombre: 'Key de desarrollo local',
+      isAdmin: false,
     },
   })
 
   console.log(`API Key creada (ID: ${apiKey.id})`)
   console.log(`  → Usar en header X-API-Key: ${rawKey}`)
 
+  // API key de admin (para gestionar tenants, api-keys, timbrados)
+  const rawAdminKey = 'admin-api-key-32-chars-minimum-here'
+  const adminApiKey = await prisma.apiKey.upsert({
+    where: { hash: hashApiKey(rawAdminKey) },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      hash: hashApiKey(rawAdminKey),
+      nombre: 'Key de admin local',
+      isAdmin: true,
+    },
+  })
+
+  console.log(`API Key Admin creada (ID: ${adminApiKey.id})`)
+  console.log(`  → Usar en header X-API-Key: ${rawAdminKey}`)
+
   // Timbrado de prueba (homologación)
+  // Según guía oficial DNIT: el número de timbrado es el RUC del contribuyente (sin DV)
+  // pudiendo agregar "0" al inicio si corresponde (ej: RUC 80069563 → timbrado 80069563)
   const timbrado = await prisma.timbrado.upsert({
     where: {
       tenantId_numero_establecimiento_puntoExpedicion_tipoDocumento: {
         tenantId: tenant.id,
-        numero: '12345678',
+        numero: '80069563',
         establecimiento: '001',
         puntoExpedicion: '001',
         tipoDocumento: 1,
@@ -48,7 +67,7 @@ async function main() {
     update: {},
     create: {
       tenantId: tenant.id,
-      numero: '12345678',
+      numero: '80069563',  // RUC del contribuyente sin DV (guía DNIT)
       establecimiento: '001',
       puntoExpedicion: '001',
       tipoDocumento: 1,  // Factura Electrónica

@@ -1,7 +1,7 @@
-import * as fs from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import type { SifenSoapClient } from '../../../services/sifen/soap.client.js'
+import type { CertificateManager } from '../../../services/certificate/types.js'
 import { EmitirDeSchema } from '../../../schemas/de.schema.js'
 import { generarXmlDe } from '../../../services/xml/generator.js'
 import { firmarXmlDe } from '../../../services/xml/signer.js'
@@ -9,23 +9,24 @@ import { validarEstructuraXml } from '../../../services/xml/validator.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { calcularTotalesIva, type ItemIva } from '../../../utils/iva.js'
 import { generarKudePdf } from '../../../services/kude/generator.js'
+import { getStorageProvider } from '../../../services/storage/factory.js'
 import { reservarNumeros } from '../../../services/secuencia.js'
 import { parsearRespuestaSifen } from '../../../services/xml/parser.js'
+import { dispararWebhook } from '../../../services/webhook/dispatcher.js'
+import { WEBHOOK_EVENTOS } from '../../../services/webhook/types.js'
 import { env } from '../../../config/env.js'
-
-// Certificado leído una sola vez al inicio del módulo (C1)
-const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
 
 interface DocumentosRouteOptions {
   prisma: PrismaClient
-  soapClient: SifenSoapClient
+  getSoapClient: (tenantId: string) => Promise<SifenSoapClient>
+  certManager: CertificateManager
 }
 
 export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = async (
   fastify,
   opts,
 ) => {
-  const { prisma, soapClient } = opts
+  const { prisma, getSoapClient, certManager } = opts
   const authHook = crearAuthHook(prisma)
 
   // ─── POST /v1/documentos — Emitir DE ──────────────────────────────────────
@@ -48,18 +49,22 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
       const inicio = Date.now()
       const input = EmitirDeSchema.parse(request.body)
       const tenantId = request.tenantId
+      const soapClient = await getSoapClient(tenantId)
 
-      // 1. Obtener timbrado del tenant
-      const timbrado = await prisma.timbrado.findFirst({
-        where: {
-          tenantId,
-          numero: input.timbrado.numero,
-          establecimiento: input.timbrado.establecimiento,
-          puntoExpedicion: input.timbrado.puntoExpedicion,
-          tipoDocumento: input.tipoDocumento,
-          activo: true,
-        },
-      })
+      // 1. Obtener timbrado del tenant + CSC para QR
+      const [timbrado, tenant] = await Promise.all([
+        prisma.timbrado.findFirst({
+          where: {
+            tenantId,
+            numero: input.timbrado.numero,
+            establecimiento: input.timbrado.establecimiento,
+            puntoExpedicion: input.timbrado.puntoExpedicion,
+            tipoDocumento: input.tipoDocumento,
+            activo: true,
+          },
+        }),
+        prisma.tenant.findUnique({ where: { id: tenantId }, select: { idCsc: true, csc: true } }),
+      ])
 
       if (!timbrado) {
         return reply.status(422).send({
@@ -83,7 +88,10 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
       const [numero] = await reservarNumeros(prisma, timbrado.id, tenantId, 1)
 
       // 4. Generar XML
-      const { xml, cdc, urlQr } = generarXmlDe(input, numero!)
+      const { xml, cdc, urlQr } = generarXmlDe(input, numero!, {
+        idCsc: tenant?.idCsc ?? undefined,
+        valorCsc: tenant?.csc ?? undefined,
+      })
 
       // 5. Validar estructura antes de firmar
       const validacion = validarEstructuraXml(xml)
@@ -96,10 +104,11 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      // 6. Firmar con el certificado del contribuyente
+      // 6. Firmar con el certificado del tenant (per-tenant en v0.3)
+      const cert = await certManager.obtenerCert(tenantId)
       const { xmlFirmado, digestValue } = firmarXmlDe(xml, {
-        p12Buffer,
-        passphrase: env.SIFEN_CERT_PASS,
+        p12Buffer: cert.p12Buffer,
+        passphrase: cert.passphrase,
       })
 
       // 7. Actualizar URL QR con el DigestValue real (post-firma)
@@ -154,6 +163,7 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
           fechaAprobacion: respuestaSifen.ok ? new Date() : undefined,
           codigoRespuestaSifen: respuestaParsed?.codigo,
           mensajeRespuestaSifen: respuestaParsed?.mensaje,
+          nroProtocolo: respuestaParsed?.protocolo,
         },
       })
 
@@ -172,6 +182,10 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
       })
 
       if (!respuestaSifen.ok) {
+        // Notificar rechazo via webhook (fire-and-forget)
+        void dispararWebhook(prisma, tenantId, WEBHOOK_EVENTOS.DE_RECHAZADO, {
+          cdc, codigoSifen: respuestaParsed?.codigo, mensajeSifen: respuestaParsed?.mensaje,
+        })
         return reply.status(422).send({
           statusCode: 422,
           error: 'SIFEN rechazó el documento',
@@ -179,6 +193,22 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
           codigoSifen: respuestaParsed?.codigo,
           cdc,
         })
+      }
+
+      // Notificar aprobación via webhook (fire-and-forget)
+      void dispararWebhook(prisma, tenantId, WEBHOOK_EVENTOS.DE_APROBADO, {
+        cdc, estado: estadoFinal, codigoSifen: respuestaParsed?.codigo,
+      })
+
+      // Métrica de emisión (solo si habilitadas)
+      if (env.METRICS_ENABLED) {
+        void import('../../../services/metrics/index.js').then((m) => {
+          m.deEmitidos.inc({
+            tenantId,
+            tipo: String(input.tipoDocumento),
+            estado: estadoFinal,
+          })
+        }).catch(() => {})
       }
 
       return reply.status(201).send({
@@ -231,7 +261,8 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      // Consulta en tiempo real a SIFEN
+      // Consulta en tiempo real a SIFEN (usa cliente global — consultas no requieren cert del tenant)
+      const soapClient = await getSoapClient(tenantId)
       const consultaSifen = await soapClient.consultarPorCdc(cdc)
 
       return reply.send({
@@ -287,7 +318,21 @@ export const documentosRoutes: FastifyPluginAsync<DocumentosRouteOptions> = asyn
         })
       }
 
-      const { pdf } = await generarKudePdf(documento.xmlFirmado)
+      const storage = getStorageProvider()
+      const storageKey = `${tenantId}/${cdc}.pdf`
+
+      let pdf: Buffer
+      if (await storage.exists(storageKey)) {
+        // Servir desde storage (generado previamente por el worker)
+        pdf = await storage.download(storageKey)
+      } else {
+        // Generar on-demand y subir para futuras requests
+        const resultado = await generarKudePdf(documento.xmlFirmado)
+        pdf = resultado.pdf
+        void storage.upload(storageKey, pdf, 'application/pdf').catch(() => {
+          // No crítico si falla el upload — el PDF ya fue generado
+        })
+      }
 
       return reply
         .header('Content-Type', 'application/pdf')

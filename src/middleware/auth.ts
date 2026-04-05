@@ -5,6 +5,7 @@ import type { PrismaClient } from '@prisma/client'
 declare module 'fastify' {
   interface FastifyRequest {
     tenantId: string
+    metricsInicio?: number
   }
 }
 

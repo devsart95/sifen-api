@@ -5,6 +5,16 @@ import { SIFEN_ENDPOINTS, SIFEN_NAMESPACE, SOAP_NAMESPACE, LIMITES } from '../..
 import { env } from '../../config/env.js'
 import { CircuitBreaker, CircuitBreakerOpenError, type CircuitState } from './circuit-breaker.js'
 
+// Métricas lazy — solo se importan si METRICS_ENABLED
+let metricsModule: typeof import('../metrics/index.js') | null = null
+async function getMetrics() {
+  if (!env.METRICS_ENABLED) return null
+  if (!metricsModule) {
+    metricsModule = await import('../metrics/index.js')
+  }
+  return metricsModule
+}
+
 export type SifenAmbiente = 'test' | 'produccion'
 
 export interface SoapResponse {
@@ -19,12 +29,17 @@ export interface SoapResponse {
  * Cada instancia carga el certificado PKCS#12 del contribuyente.
  * La autenticación ocurre en la capa TLS (no hay API key ni Bearer token).
  */
+export interface CertOpts {
+  pfx: Buffer
+  passphrase: string
+}
+
 export class SifenSoapClient {
   private readonly http: AxiosInstance
   private readonly endpoints: (typeof SIFEN_ENDPOINTS)[SifenAmbiente]
   private readonly cb: CircuitBreaker
 
-  constructor(ambiente: SifenAmbiente = env.SIFEN_AMBIENTE) {
+  constructor(ambiente: SifenAmbiente = env.SIFEN_AMBIENTE, certOpts?: CertOpts) {
     this.endpoints = SIFEN_ENDPOINTS[ambiente]
     this.cb = new CircuitBreaker('sifen', {
       umbralFallos: 5,
@@ -32,14 +47,19 @@ export class SifenSoapClient {
       cooldownMs: 30_000,
     })
 
-    const pfxBuffer = fs.readFileSync(env.SIFEN_CERT_PATH)
+    // Cert inyectado (multi-tenant) o fallback a env vars (backward compat)
+    const pfxBuffer = certOpts?.pfx ?? (env.SIFEN_CERT_PATH ? fs.readFileSync(env.SIFEN_CERT_PATH) : null)
+    const passphrase = certOpts?.passphrase ?? env.SIFEN_CERT_PASS
 
-    const httpsAgent = new https.Agent({
-      pfx: pfxBuffer,
-      passphrase: env.SIFEN_CERT_PASS,
-      // En homologación los certs de prueba pueden ser autofirmados
+    const agentOpts: https.AgentOptions = {
       rejectUnauthorized: ambiente === 'produccion',
-    })
+    }
+    if (pfxBuffer && passphrase) {
+      agentOpts.pfx = pfxBuffer
+      agentOpts.passphrase = passphrase
+    }
+
+    const httpsAgent = new https.Agent(agentOpts)
 
     this.http = axios.create<string>({
       baseURL: this.endpoints.base,
@@ -122,17 +142,36 @@ export class SifenSoapClient {
   }
 
   private async post(endpoint: string, body: string): Promise<SoapResponse> {
+    // Extraer nombre de operación del endpoint para métricas
+    const operacion = endpoint.split('/').at(-1)?.replace('.wsdl', '') ?? 'unknown'
+    const inicio = Date.now()
+
     try {
       const response = await this.cb.ejecutar(() =>
         this.http.post<string>(endpoint, body),
       )
       const data: unknown = response.data
-      return {
+      const resultado: SoapResponse = {
         ok: true,
         data: typeof data === 'string' ? data : String(data),
         statusCode: response.status,
       }
+
+      void getMetrics().then((m) => {
+        if (!m) return
+        m.soapRequests.inc({ operacion, resultado: 'ok' })
+        m.soapDuration.observe({ operacion }, (Date.now() - inicio) / 1000)
+      })
+
+      return resultado
     } catch (error) {
+      void getMetrics().then((m) => {
+        if (!m) return
+        const resultado = error instanceof CircuitBreakerOpenError ? 'circuit_open' : 'error'
+        m.soapRequests.inc({ operacion, resultado })
+        m.soapDuration.observe({ operacion }, (Date.now() - inicio) / 1000)
+      })
+
       if (error instanceof CircuitBreakerOpenError) {
         return { ok: false, error: error.message, statusCode: 503 }
       }

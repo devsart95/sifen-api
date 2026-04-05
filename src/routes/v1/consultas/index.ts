@@ -6,14 +6,14 @@ import { validarRuc } from '../../../utils/ruc.js'
 
 interface ConsultasRouteOptions {
   prisma: PrismaClient
-  soapClient: SifenSoapClient
+  getSoapClient: (tenantId: string) => Promise<SifenSoapClient>
 }
 
 export const consultasRoutes: FastifyPluginAsync<ConsultasRouteOptions> = async (
   fastify,
   opts,
 ) => {
-  const { prisma, soapClient } = opts
+  const { prisma, getSoapClient } = opts
   const authHook = crearAuthHook(prisma)
 
   // ─── GET /v1/consultas/ruc/:ruc ───────────────────────────────────────────
@@ -48,6 +48,7 @@ export const consultasRoutes: FastifyPluginAsync<ConsultasRouteOptions> = async 
       }
 
       const rucSinDv = ruc.replace('-', '').slice(0, -1)
+      const soapClient = await getSoapClient(tenantId)
       const respuesta = await soapClient.consultarRuc(rucSinDv)
 
       await prisma.auditLog.create({
@@ -98,12 +99,13 @@ export const consultasRoutes: FastifyPluginAsync<ConsultasRouteOptions> = async 
       const { protocolo } = request.params as { protocolo: string }
       const tenantId = request.tenantId
 
+      const soapClient = await getSoapClient(tenantId)
       const respuesta = await soapClient.consultarLote(protocolo)
 
       await prisma.auditLog.create({
         data: {
           tenantId,
-          accion: 'CONSULTA_CDC',
+          accion: 'CONSULTA_LOTE',
           exitoso: respuesta.ok,
           ip: request.ip,
         },

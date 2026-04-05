@@ -80,6 +80,6 @@ export function validarCdc(cdc: string): boolean {
 
 /** Genera 9 dígitos aleatorios para el código de seguridad del CDC usando crypto.randomInt */
 function generarCodigoSeguridad(): string {
-  const seg = randomInt(0, 1_000_000_000)
+  const seg = randomInt(1, 1_000_000_000) // inicio en 1 — evitar "000000000" como código
   return String(seg).padStart(9, '0')
 }

@@ -1,21 +1,41 @@
 /**
  * Setup para tests E2E contra SIFEN homologación.
- * Requiere: SIFEN_CERT_PATH, SIFEN_CERT_PASS, DATABASE_URL, REDIS_URL
- * y SIFEN_AMBIENTE=test en el entorno.
+ *
+ * Los tests E2E son condicionales: solo corren si SIFEN_E2E_CERT_PATH está definido.
+ * Esto permite ejecutar la suite completa en CI sin certificado real.
+ *
+ * Para correr los tests E2E localmente:
+ *   SIFEN_E2E_CERT_PATH=/path/cert.p12 SIFEN_E2E_CERT_PASS=pass pnpm test:e2e
  */
-import { beforeAll } from 'vitest'
+import { describe, it } from 'vitest'
 
-beforeAll(() => {
-  const required = ['SIFEN_CERT_PATH', 'SIFEN_CERT_PASS', 'DATABASE_URL', 'API_KEY_SECRET']
-  const missing = required.filter((key) => !process.env[key])
+export const E2E_HABILITADO =
+  !!process.env['SIFEN_E2E_CERT_PATH'] && !!process.env['SIFEN_E2E_CERT_PASS']
 
-  if (missing.length > 0) {
-    throw new Error(
-      `Tests E2E requieren variables de entorno: ${missing.join(', ')}\n` +
-      'Copiar .env.test.example a .env.test y completar con credenciales de homologación.'
-    )
+/** Wrapper de `describe` que omite el bloque si los tests E2E están deshabilitados. */
+export function describeE2e(name: string, fn: () => void) {
+  if (E2E_HABILITADO) {
+    describe(name, fn)
+  } else {
+    describe.skip(`[E2E OMITIDO — sin cert] ${name}`, fn)
   }
+}
 
-  // Forzar ambiente de test
-  process.env['SIFEN_AMBIENTE'] = 'test'
-})
+/** Wrapper de `it` que omite si E2E está deshabilitado. */
+export function itE2e(name: string, fn: () => Promise<void>) {
+  if (E2E_HABILITADO) {
+    it(name, fn, 30_000)
+  } else {
+    it.skip(name, fn)
+  }
+}
+
+export function getE2eConfig() {
+  if (!E2E_HABILITADO) throw new Error('E2E no habilitado')
+  return {
+    certPath: process.env['SIFEN_E2E_CERT_PATH']!,
+    certPass: process.env['SIFEN_E2E_CERT_PASS']!,
+    ruc: process.env['SIFEN_E2E_RUC'] ?? '80069563',
+    timbrado: process.env['SIFEN_E2E_TIMBRADO'] ?? '12345678',
+  }
+}

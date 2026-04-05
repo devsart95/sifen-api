@@ -15,17 +15,39 @@ model Tenant {
   ruc           String   @unique
   dvRuc         String   @map("dv_ruc")
   activo        Boolean  @default(true)
-  rateLimitMax  Int?     @map("rate_limit_max")   // override del global por tenant
+  rateLimitMax  Int?     @map("rate_limit_max")
+
+  // Certificado PKCS#12 encriptado (AES-256-GCM, key derivada via HKDF por tenant)
+  certEncriptado     Bytes?    @map("cert_encriptado")       // .p12 cifrado (bytea)
+  certIv             String?   @map("cert_iv")               // IV hex (12 bytes = 24 chars)
+  certAuthTag        String?   @map("cert_auth_tag")         // AuthTag hex (16 bytes)
+  certPassEncriptado String?   @map("cert_pass_encriptado")  // passphrase cifrada
+  certPassIv         String?   @map("cert_pass_iv")
+  certPassAuthTag    String?   @map("cert_pass_auth_tag")
+  certSubidoEn       DateTime? @map("cert_subido_en")
+  certExpiraEn       DateTime? @map("cert_expira_en")        // extraído del X509
+
+  // Código de Seguridad del Contribuyente (CSC) — proporcionado por DNIT para hash del QR
+  // Pruebas: idCsc="0001", csc="ABCD0000000000000000000000000000"
+  idCsc          String?  @default("0001") @map("id_csc")
+  csc            String?  @map("csc")
+
+  // Webhooks
+  webhookUrl     String?  @map("webhook_url")
+  webhookSecret  String?  @map("webhook_secret")   // HMAC-SHA256 key (hex 64 chars)
+  webhookActivo  Boolean  @default(false) @map("webhook_activo")
+
   creadoEn      DateTime @default(now()) @map("creado_en")
   actualizadoEn DateTime @updatedAt @map("actualizado_en")
 
-  apiKeys      ApiKey[]
-  timbrados    Timbrado[]
-  documentos   DocumentoElectronico[]
-  eventos      EventoElectronico[]
-  auditLogs    AuditLog[]
-  secuencias   SecuenciaTimbrado[]
-  idempotencia IdempotencyRecord[]
+  apiKeys          ApiKey[]
+  timbrados        Timbrado[]
+  documentos       DocumentoElectronico[]
+  eventos          EventoElectronico[]
+  auditLogs        AuditLog[]
+  secuencias       SecuenciaTimbrado[]
+  idempotencia     IdempotencyRecord[]
+  webhookDeliveries WebhookDelivery[]
 
   @@map("tenants")
 }
@@ -36,7 +58,7 @@ model ApiKey {
   hash      String    @unique
   nombre    String
   activa    Boolean   @default(true)
-  isAdmin   Boolean   @default(false) @map("is_admin")  // acceso a rutas /admin
+  isAdmin   Boolean   @default(false) @map("is_admin")
   ultimoUso DateTime? @map("ultimo_uso")
   creadaEn  DateTime  @default(now()) @map("creada_en")
 
@@ -50,8 +72,8 @@ model ApiKey {
 model Timbrado {
   id              String    @id @default(cuid())
   tenantId        String    @map("tenant_id")
-  numero          String    // 8 dígitos
-  establecimiento String    // 3 dígitos
+  numero          String
+  establecimiento String
   puntoExpedicion String    @map("punto_expedicion")
   tipoDocumento   Int       @map("tipo_documento")
   fechaInicio     DateTime  @map("fecha_inicio")
@@ -67,7 +89,6 @@ model Timbrado {
   @@map("timbrados")
 }
 
-// Secuencia atómica por timbrado — evita race conditions en numeración correlativa
 model SecuenciaTimbrado {
   timbradoId    String   @id @map("timbrado_id")
   tenantId      String   @map("tenant_id")
@@ -90,7 +111,7 @@ enum EstadoDE {
   RECHAZADO
   CANCELADO
   INUTILIZADO
-  EN_PROCESO  // lote async — SIFEN recibió pero aún no procesó
+  EN_PROCESO
   ERROR
 }
 
@@ -105,23 +126,19 @@ model DocumentoElectronico {
   tipoEmision   Int      @default(1) @map("tipo_emision")
   estado        EstadoDE @default(PENDIENTE)
 
-  // Receptor
   receptorRuc    String? @map("receptor_ruc")
   receptorNombre String  @map("receptor_nombre")
 
-  // Totales (en Guaraníes enteros)
   moneda      String @default("PYG")
   totalBruto  Int    @map("total_bruto")
   totalIva    Int    @map("total_iva")
 
-  // XML y respuesta SIFEN
   xmlFirmado            String? @map("xml_firmado") @db.Text
   xmlRespuesta          String? @map("xml_respuesta") @db.Text
   nroProtocolo          String? @map("nro_protocolo")
-  codigoRespuestaSifen  String? @map("codigo_respuesta_sifen")   // dCodRes de SIFEN
-  mensajeRespuestaSifen String? @map("mensaje_respuesta_sifen")  // dMsgRes de SIFEN
+  codigoRespuestaSifen  String? @map("codigo_respuesta_sifen")
+  mensajeRespuestaSifen String? @map("mensaje_respuesta_sifen")
 
-  // Fechas
   fechaEmision    DateTime  @map("fecha_emision")
   fechaAprobacion DateTime? @map("fecha_aprobacion")
   creadoEn        DateTime  @default(now()) @map("creado_en")
@@ -132,7 +149,7 @@ model DocumentoElectronico {
   eventos   EventoElectronico[]
   auditLogs AuditLog[]
 
-  @@unique([tenantId, timbradoId, numero])  // protección contra duplicados a nivel DB
+  @@unique([tenantId, timbradoId, numero])
   @@index([tenantId, estado])
   @@index([tenantId, fechaEmision])
   @@map("documentos_electronicos")
@@ -140,13 +157,12 @@ model DocumentoElectronico {
 
 // ─── Idempotencia ─────────────────────────────────────────────────────────────
 
-// Registro para X-Idempotency-Key — evita doble emisión por retry de red
 model IdempotencyRecord {
-  key          String   @id                        // X-Idempotency-Key del cliente
+  key          String   @id
   tenantId     String   @map("tenant_id")
-  responseBody Json     @map("response_body")       // respuesta original serializada
+  responseBody Json     @map("response_body")
   statusCode   Int      @map("status_code")
-  expiresAt    DateTime @map("expires_at")          // TTL: 24 horas
+  expiresAt    DateTime @map("expires_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
@@ -187,12 +203,40 @@ model EventoElectronico {
   @@map("eventos_electronicos")
 }
 
+// ─── Webhooks ─────────────────────────────────────────────────────────────────
+
+enum WebhookEstado {
+  PENDIENTE
+  ENTREGADO
+  FALLIDO
+}
+
+model WebhookDelivery {
+  id          String        @id @default(cuid())
+  tenantId    String        @map("tenant_id")
+  evento      String        // "de.aprobado", "lote.completado", etc.
+  payload     Json
+  estado      WebhookEstado @default(PENDIENTE)
+  intentos    Int           @default(0)
+  ultimoError String?       @map("ultimo_error")
+  statusCode  Int?          @map("status_code")
+  creadoEn    DateTime      @default(now()) @map("creado_en")
+  entregadoEn DateTime?     @map("entregado_en")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, creadoEn])
+  @@index([estado])
+  @@map("webhook_deliveries")
+}
+
 // ─── Audit Log ────────────────────────────────────────────────────────────────
 
 enum TipoAccion {
   EMISION_DE
   ENVIO_LOTE
   CONSULTA_CDC
+  CONSULTA_LOTE
   CONSULTA_RUC
   ENVIO_EVENTO
   CANCELACION

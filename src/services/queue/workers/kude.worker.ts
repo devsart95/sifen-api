@@ -2,16 +2,16 @@ import type { Job } from 'bullmq'
 import type { PrismaClient } from '@prisma/client'
 import type { KudePdfJobData } from '../bull.js'
 import { generarKudePdf } from '../../kude/generator.js'
-import * as path from 'node:path'
-import * as fs from 'node:fs/promises'
-
-const KUDE_DIR = process.env['KUDE_OUTPUT_DIR'] ?? '/tmp/kude'
+import { getStorageProvider } from '../../storage/factory.js'
 
 /**
  * Procesador del worker de KuDE.
- * Genera el PDF a partir del XML aprobado y lo persiste en disco.
+ * Genera el PDF a partir del XML aprobado y lo persiste via StorageProvider.
  *
- * En producción, el path de salida debería ser un volumen montado o S3.
+ * El provider se configura con STORAGE_PROVIDER env var:
+ *  - 'local' (default): disco local en STORAGE_LOCAL_DIR
+ *  - 's3': bucket S3/MinIO/R2
+ *
  * Ctx: puppeteer es pesado — concurrency = 2 en el worker es suficiente.
  */
 export function crearProcesadorKude(prisma: PrismaClient) {
@@ -22,14 +22,12 @@ export function crearProcesadorKude(prisma: PrismaClient) {
 
     const { pdf } = await generarKudePdf(xmlFirmado)
 
-    // Persistir PDF en disco (organizado por tenant)
-    const tenantDir = path.join(KUDE_DIR, tenantId)
-    await fs.mkdir(tenantDir, { recursive: true })
+    // Clave de almacenamiento organizada por tenant — compatible con S3 y local
+    const key = `${tenantId}/${cdc}.pdf`
+    const storage = getStorageProvider()
+    await storage.upload(key, pdf, 'application/pdf')
 
-    const outputPath = path.join(tenantDir, `${cdc}.pdf`)
-    await fs.writeFile(outputPath, pdf)
-
-    job.log(`KuDE generado: ${outputPath} (${pdf.length} bytes)`)
+    job.log(`KuDE guardado: ${key} (${pdf.length} bytes)`)
 
     await prisma.auditLog.create({
       data: {
@@ -37,8 +35,8 @@ export function crearProcesadorKude(prisma: PrismaClient) {
         accion: 'EMISION_DE',
         documentoId,
         exitoso: true,
-        mensaje: `KuDE generado: ${outputPath}`,
-        detalles: { outputPath, bytes: pdf.length },
+        mensaje: `KuDE generado y guardado: ${key}`,
+        detalles: { key, bytes: pdf.length },
       },
     })
   }

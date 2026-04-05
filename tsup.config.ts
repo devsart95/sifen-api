@@ -27,5 +27,8 @@ export default defineConfig({
     '@xmldom/xmldom',
     'puppeteer',
     'zod',
+    'prom-client',
+    '@aws-sdk/client-s3',
+    '@aws-sdk/s3-request-presigner',
   ],
 })

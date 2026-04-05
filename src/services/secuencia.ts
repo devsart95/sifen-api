@@ -21,7 +21,8 @@ export async function reservarNumeros(
 
   // Upsert atómico: crea la secuencia si no existe, luego incrementa N
   // El UPDATE es atómico en PostgreSQL — sin race condition posible
-  const resultado = await prisma.$queryRaw<Array<{ ultimo_numero: number }>>`
+  // Nota: $queryRaw retorna columnas Int de PostgreSQL como BigInt en Node.js
+  const resultado = await prisma.$queryRaw<Array<{ ultimo_numero: bigint }>>`
     INSERT INTO secuencias_timbrado (timbrado_id, tenant_id, ultimo_numero, actualizado_en)
     VALUES (${timbradoId}, ${tenantId}, ${cantidad}, NOW())
     ON CONFLICT (timbrado_id) DO UPDATE
@@ -30,10 +31,13 @@ export async function reservarNumeros(
     RETURNING ultimo_numero
   `
 
-  const ultimoNumero = resultado[0]?.ultimo_numero
-  if (ultimoNumero === undefined) {
+  const ultimoRaw = resultado[0]?.ultimo_numero
+  if (ultimoRaw === undefined || ultimoRaw === null) {
     throw new Error(`Error al reservar número correlativo para timbrado ${timbradoId}`)
   }
+
+  // Convertir BigInt → number (seguro: los números de timbrado no superan Number.MAX_SAFE_INTEGER)
+  const ultimoNumero = Number(ultimoRaw)
 
   // Si cantidad=1 y ultimoNumero=5, devuelve [5]
   // Si cantidad=3 y ultimoNumero=8, devuelve [6, 7, 8]

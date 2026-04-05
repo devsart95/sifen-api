@@ -1,27 +1,26 @@
-import * as fs from 'node:fs'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
 import type { SifenSoapClient } from '../../../services/sifen/soap.client.js'
+import type { CertificateManager } from '../../../services/certificate/types.js'
 import { EventoSchema } from '../../../schemas/evento.schema.js'
 import { firmarXmlDe } from '../../../services/xml/signer.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { SIFEN_NAMESPACE, TIPO_EVENTO } from '../../../config/constants.js'
 import { formatearFechaXml } from '../../../utils/date.js'
-import { env } from '../../../config/env.js'
-
-// Certificado leído una sola vez al inicio del módulo (C1)
-const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
+import { dispararWebhook } from '../../../services/webhook/dispatcher.js'
+import { WEBHOOK_EVENTOS } from '../../../services/webhook/types.js'
 
 interface EventosRouteOptions {
   prisma: PrismaClient
-  soapClient: SifenSoapClient
+  getSoapClient: (tenantId: string) => Promise<SifenSoapClient>
+  certManager: CertificateManager
 }
 
 export const eventosRoutes: FastifyPluginAsync<EventosRouteOptions> = async (
   fastify,
   opts,
 ) => {
-  const { prisma, soapClient } = opts
+  const { prisma, getSoapClient, certManager } = opts
   const authHook = crearAuthHook(prisma)
 
   // ─── POST /v1/eventos — Enviar evento (cancelación, inutilización, conformidad) ──
@@ -43,14 +42,16 @@ export const eventosRoutes: FastifyPluginAsync<EventosRouteOptions> = async (
     async (request, reply) => {
       const evento = EventoSchema.parse(request.body)
       const tenantId = request.tenantId
+      const soapClient = await getSoapClient(tenantId)
 
       // Generar XML del evento según tipo
       const xmlEvento = generarXmlEvento(evento, tenantId)
 
-      // Firmar el evento con el mismo certificado del contribuyente
+      // Firmar con el certificado del tenant
+      const cert = await certManager.obtenerCert(tenantId)
       const { xmlFirmado } = firmarXmlDe(xmlEvento, {
-        p12Buffer,
-        passphrase: env.SIFEN_CERT_PASS,
+        p12Buffer: cert.p12Buffer,
+        passphrase: cert.passphrase,
       })
 
       // Guardar en DB
@@ -100,7 +101,11 @@ export const eventosRoutes: FastifyPluginAsync<EventosRouteOptions> = async (
       await prisma.auditLog.create({
         data: {
           tenantId,
-          accion: evento.tipo === TIPO_EVENTO.CANCELACION ? 'CANCELACION' : 'ENVIO_EVENTO',
+          accion: evento.tipo === TIPO_EVENTO.CANCELACION
+            ? 'CANCELACION'
+            : evento.tipo === TIPO_EVENTO.INUTILIZACION
+            ? 'INUTILIZACION'
+            : 'ENVIO_EVENTO',
           documentoId: documentoId ?? null,
           eventoId: eventoDb.id,
           exitoso: respuesta.ok,
@@ -114,6 +119,17 @@ export const eventosRoutes: FastifyPluginAsync<EventosRouteOptions> = async (
           statusCode: 422,
           error: 'SIFEN rechazó el evento',
           message: respuesta.error ?? 'Error desconocido',
+        })
+      }
+
+      // Notificar cancelación aceptada via webhook
+      if (evento.tipo === TIPO_EVENTO.CANCELACION && documentoId) {
+        void dispararWebhook(prisma, tenantId, WEBHOOK_EVENTOS.DE_CANCELADO, {
+          eventoId: eventoDb.id, documentoId, cdc: 'cdc' in evento ? evento.cdc : undefined,
+        })
+      } else {
+        void dispararWebhook(prisma, tenantId, WEBHOOK_EVENTOS.EVENTO_ACEPTADO, {
+          eventoId: eventoDb.id, tipoEvento: evento.tipo,
         })
       }
 
@@ -166,6 +182,7 @@ function generarXmlEvento(evento: ReturnType<typeof EventoSchema.parse>, _tenant
     case TIPO_EVENTO.DISCONFORMIDAD:
     case TIPO_EVENTO.DESCONOCIMIENTO:
     case TIPO_EVENTO.ACUSE_RECIBO:
+    case TIPO_EVENTO.AJUSTE_EVENTO:
       return [
         `<?xml version="1.0" encoding="UTF-8"?>`,
         `<rGeVe xmlns="${SIFEN_NAMESPACE}">`,
@@ -177,6 +194,11 @@ function generarXmlEvento(evento: ReturnType<typeof EventoSchema.parse>, _tenant
         `  </rGeVeNovRec>`,
         `</rGeVe>`,
       ].filter(Boolean).join('\n')
+
+    default: {
+      const _exhaustivo: never = evento
+      throw new Error(`Tipo de evento no soportado: ${JSON.stringify(_exhaustivo)}`)
+    }
   }
 }
 

@@ -3,8 +3,9 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-      target: deps
-    command: pnpm dev
+      target: dev-deps
+    # Genera lockfile, sincroniza schema y levanta dev server
+    command: sh -c "pnpm prisma generate && pnpm db:push && pnpm db:seed && pnpm dev"
     ports:
       - "3000:3000"
     environment:
@@ -12,16 +13,19 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       SIFEN_AMBIENTE: test
-      SIFEN_CERT_PATH: /certs/cert.p12
-      SIFEN_CERT_PASS: ${SIFEN_CERT_PASS}
+      # Cert global opcional — si no hay cert, los endpoints SOAP fallan pero el servidor arranca
+      SIFEN_CERT_PATH: ${SIFEN_CERT_PATH:-}
+      SIFEN_CERT_PASS: ${SIFEN_CERT_PASS:-}
       DATABASE_URL: postgresql://sifen:sifen123@db:5432/sifen_api
       REDIS_URL: redis://redis:6379
       API_KEY_SECRET: ${API_KEY_SECRET:-dev-secret-32-chars-minimum-here}
       RATE_LIMIT_MAX: 1000
+      STORAGE_PROVIDER: local
+      STORAGE_LOCAL_DIR: /app/storage/kude
+      METRICS_ENABLED: false
     volumes:
       - ..:/app
       - /app/node_modules
-      - ${SIFEN_CERT_DIR:-./certs}:/certs:ro
     depends_on:
       db:
         condition: service_healthy

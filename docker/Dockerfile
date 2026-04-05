@@ -1,4 +1,15 @@
-# ─── deps ──────────────────────────────────────────────────────────────────────
+# ─── dev-deps (sin lockfile — para desarrollo antes del primer pnpm install) ───
+FROM node:20-alpine AS dev-deps
+# openssl requerido por Prisma en Alpine
+RUN apk add --no-cache openssl
+RUN corepack enable pnpm
+WORKDIR /app
+COPY package.json ./
+# --ignore-scripts evita el postinstall de prisma generate (el schema no está aún)
+# prisma generate lo corre el command de docker-compose después de montar el volumen
+RUN pnpm install --ignore-scripts
+
+# ─── deps (con lockfile — para producción y CI) ────────────────────────────────
 FROM node:20-alpine AS deps
 RUN corepack enable pnpm
 WORKDIR /app

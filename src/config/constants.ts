@@ -90,15 +90,16 @@ export const IND_PRESENCIA = {
   OTRO: 9,
 } as const
 
-// Tipos de evento
+// Tipos de evento (Manual Técnico SIFEN v150)
 export const TIPO_EVENTO = {
   CANCELACION: 1,
   INUTILIZACION: 2,
-  ENDOSO: 3,
-  ACUSE_RECIBO: 10,
-  CONFORMIDAD: 11,
-  DISCONFORMIDAD: 12,
-  DESCONOCIMIENTO: 13,
+  // ENDOSO = 3 fue removido del MT v150 — no usar
+  ACUSE_RECIBO: 10,   // Notificación de Recepción (rol receptor)
+  CONFORMIDAD: 11,    // rol receptor
+  DISCONFORMIDAD: 12, // rol receptor
+  DESCONOCIMIENTO: 13, // rol receptor
+  AJUSTE_EVENTO: 14,  // Ajuste sobre evento previo (rol receptor)
 } as const
 
 // Monedas soportadas

@@ -70,14 +70,16 @@ export class CircuitBreaker {
 
     if (this.estado === 'OPEN') {
       if (ahora - this.abrioEn >= this.cooldownMs) {
-        // Cooldown expirado → intentar HALF_OPEN
+        // Cooldown expirado → HALF_OPEN para request de prueba
+        // Resetear contador para que la prueba empiece limpia
         this.estado = 'HALF_OPEN'
+        this.fallosConsecutivos = 0
         return false
       }
       return true
     }
 
-    // Limpiar contador si la ventana expiró
+    // Limpiar contador si la ventana de fallos expiró (solo en CLOSED)
     if (this.estado === 'CLOSED' && ahora - this.ultimoFalloEn > this.ventanaMs) {
       this.fallosConsecutivos = 0
     }

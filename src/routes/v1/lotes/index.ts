@@ -1,19 +1,17 @@
-import * as fs from 'node:fs'
 import { randomInt } from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import type { PrismaClient } from '@prisma/client'
+import type { CertificateManager } from '../../../services/certificate/types.js'
 import { z } from 'zod'
 import { EmitirDeSchema } from '../../../schemas/de.schema.js'
 import { generarXmlDe } from '../../../services/xml/generator.js'
 import { firmarXmlDe } from '../../../services/xml/signer.js'
-import { loteDeQueue } from '../../../services/queue/bull.js'
+import { getLoteDeQueue } from '../../../services/queue/bull.js'
 import { crearAuthHook } from '../../../middleware/auth.js'
 import { LIMITES } from '../../../config/constants.js'
 import { reservarNumeros } from '../../../services/secuencia.js'
-import { env } from '../../../config/env.js'
-
-// Certificado leído una sola vez al inicio del módulo (C1)
-const p12Buffer = fs.readFileSync(env.SIFEN_CERT_PATH)
+import { dispararWebhook } from '../../../services/webhook/dispatcher.js'
+import { WEBHOOK_EVENTOS } from '../../../services/webhook/types.js'
 
 const LoteSchema = z.object({
   documentos: z
@@ -24,10 +22,11 @@ const LoteSchema = z.object({
 
 interface LotesRouteOptions {
   prisma: PrismaClient
+  certManager: CertificateManager
 }
 
 export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify, opts) => {
-  const { prisma } = opts
+  const { prisma, certManager } = opts
   const authHook = crearAuthHook(prisma)
 
   // ─── POST /v1/lotes — Enviar lote asíncrono ───────────────────────────────
@@ -49,6 +48,7 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
     async (request, reply) => {
       const { documentos } = LoteSchema.parse(request.body)
       const tenantId = request.tenantId
+      const cert = await certManager.obtenerCert(tenantId)
 
       // Reservar N números de forma atómica para todos los docs del lote
       // Se necesita agrupación por timbrado — simplificamos asumiendo 1 timbrado por lote
@@ -67,9 +67,15 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
           })
         : null
 
-      const numeros = timbradoReferencia
-        ? await reservarNumeros(prisma, timbradoReferencia.id, tenantId, documentos.length)
-        : documentos.map((_, i) => i + 1) // fallback si no se encuentra timbrado
+      if (!timbradoReferencia) {
+        return reply.status(422).send({
+          statusCode: 422,
+          error: 'Timbrado no encontrado',
+          message: `No se encontró un timbrado activo para número ${primerDoc?.timbrado.numero ?? '?'} del tenant`,
+        })
+      }
+
+      const numeros = await reservarNumeros(prisma, timbradoReferencia.id, tenantId, documentos.length)
 
       // Generar y firmar todos los XMLs
       const xmlsFirmados: string[] = []
@@ -77,29 +83,43 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
 
       for (let i = 0; i < documentos.length; i++) {
         const input = documentos[i]!
-        const numero = numeros[i] ?? (i + 1)
+        const numero = numeros[i]
+        if (numero === undefined) throw new Error(`Sin número para documento ${i}`)
         const { xml, cdc } = generarXmlDe(input, numero)
         const { xmlFirmado } = firmarXmlDe(xml, {
-          p12Buffer,
-          passphrase: env.SIFEN_CERT_PASS,
+          p12Buffer: cert.p12Buffer,
+          passphrase: cert.passphrase,
         })
         xmlsFirmados.push(xmlFirmado)
         cdcs.push(cdc)
       }
 
 
-      // Encolar el lote
-      const job = await loteDeQueue.add(
-        `lote-${tenantId}-${Date.now()}`,
-        {
-          tenantId,
-          loteId: `lote-${Date.now()}`,
-          xmlsDe: xmlsFirmados,
-          cdcs,
-          idLote: randomInt(1, 100_000),
-        },
-        { priority: 1 },
-      )
+      // Encolar el lote — requiere Redis
+      let job: Awaited<ReturnType<ReturnType<typeof getLoteDeQueue>['add']>>
+      try {
+        job = await getLoteDeQueue().add(
+          `lote-${tenantId}-${Date.now()}`,
+          {
+            tenantId,
+            loteId: `lote-${Date.now()}`,
+            xmlsDe: xmlsFirmados,
+            cdcs,
+            idLote: randomInt(1, 100_000),
+          },
+          { priority: 1 },
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('REDIS_URL')) {
+          return reply.status(503).send({
+            statusCode: 503,
+            error: 'Service Unavailable',
+            message: 'El procesamiento asíncrono de lotes requiere Redis. Configure REDIS_URL para usar este endpoint.',
+          })
+        }
+        throw err
+      }
 
       // Log de inicio
       await prisma.auditLog.create({
@@ -111,6 +131,11 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
           detalles: { jobId: job.id, cdcs },
           ip: request.ip,
         },
+      })
+
+      // Notificar al enqueue — el worker dispara LOTE_COMPLETADO cuando SIFEN acepta
+      void dispararWebhook(prisma, tenantId, WEBHOOK_EVENTOS.LOTE_ENCOLADO, {
+        jobId: job.id, cantidadDocumentos: documentos.length, cdcs,
       })
 
       return reply.status(202).send({
@@ -142,7 +167,20 @@ export const lotesRoutes: FastifyPluginAsync<LotesRouteOptions> = async (fastify
     async (request, reply) => {
       const { jobId } = request.params as { jobId: string }
 
-      const job = await loteDeQueue.getJob(jobId)
+      let job: Awaited<ReturnType<ReturnType<typeof getLoteDeQueue>['getJob']>>
+      try {
+        job = await getLoteDeQueue().getJob(jobId)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('REDIS_URL')) {
+          return reply.status(503).send({
+            statusCode: 503,
+            error: 'Service Unavailable',
+            message: 'La consulta de estado de lotes requiere Redis. Configure REDIS_URL.',
+          })
+        }
+        throw err
+      }
       if (!job) {
         return reply.status(404).send({
           statusCode: 404,
