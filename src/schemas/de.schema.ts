@@ -88,6 +88,26 @@ export const PagoSchema = z.object({
   infoPago: z.string().max(500).optional(),
 })
 
+// ─── Vendedor (AutoFactura tipo 4 — gCamAE) ───────────────────────────────────
+// El emisor de una AutoFactura es el comprador; el vendedor es quien le vendió (persona física/jurídica)
+
+export const VendedorSchema = z.object({
+  naturaleza: z.union([z.literal(1), z.literal(2)]),  // 1=Contribuyente, 2=No contribuyente
+  nombre: z.string().min(1).max(255),
+  ruc: z.string().min(1).max(8).regex(/^\d+$/).optional(),   // solo si naturaleza=1
+  dvRuc: z.string().length(1).optional(),                     // solo si naturaleza=1
+  tipoDocumento: z.number().int().min(1).max(9).optional(),   // si naturaleza=2
+  documento: z.string().min(1).max(20).optional(),            // si naturaleza=2
+  direccion: z.string().min(1).max(255),
+  numeroCasa: z.string().max(6).default('0'),
+  departamento: z.number().int().min(1).max(17).optional(),
+  distrito: z.number().int().optional(),
+  ciudad: z.number().int().optional(),
+  telefono: z.string().max(15).optional(),
+  celular: z.string().max(15).optional(),
+  email: z.string().email().optional(),
+})
+
 // ─── Documento Electrónico (cuerpo de request) ───────────────────────────────
 
 export const EmitirDeSchema = z.object({
@@ -100,6 +120,9 @@ export const EmitirDeSchema = z.object({
 
   // Solo para Facturas (tipo 1, 2, 3)
   indicadorPresencia: z.nativeEnum(IND_PRESENCIA).optional(),
+
+  // Solo para AutoFactura (tipo 4) — datos del vendedor/proveedor
+  vendedor: VendedorSchema.optional(),
 
   // Solo para NC/ND (tipo 5, 6) — referencia al DE original
   documentoAsociado: z
@@ -131,3 +154,4 @@ export type Item = z.infer<typeof ItemSchema>
 export type Emisor = z.infer<typeof EmisorSchema>
 export type Receptor = z.infer<typeof ReceptorSchema>
 export type Pago = z.infer<typeof PagoSchema>
+export type Vendedor = z.infer<typeof VendedorSchema>

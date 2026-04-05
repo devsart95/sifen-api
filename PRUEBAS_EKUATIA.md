@@ -53,7 +53,7 @@ IdCSC: 0002  →  CSC: EFGH0000000000000000000000000000
 ## Configurar Tenant y Timbrado en sifen-api
 
 ```bash
-# 1. Crear tenant
+# 1. Crear tenant (incluir CSC de prueba)
 curl -X POST http://localhost:3000/v1/admin/tenants \
   -H "X-API-Key: admin-api-key-32-chars-minimum-here" \
   -H "Content-Type: application/json" \
@@ -61,7 +61,9 @@ curl -X POST http://localhost:3000/v1/admin/tenants \
     "nombre": "Mi Empresa SA",
     "ruc": "80069563",
     "dvRuc": "1",
-    "rateLimitMax": 1000
+    "rateLimitMax": 1000,
+    "idCsc": "0001",
+    "csc": "ABCD0000000000000000000000000000"
   }'
 # Guarda el "id" del tenant en la respuesta
 
@@ -128,27 +130,33 @@ curl -X POST http://localhost:3000/v1/documentos \
     "tipoDocumento": 1,
     "tipoEmision": 1,
     "moneda": "PYG",
+    "indicadorPresencia": 1,
     "timbrado": {
       "numero": "80069563",
       "establecimiento": "001",
-      "puntoExpedicion": "001"
+      "puntoExpedicion": "001",
+      "fechaInicio": "2024-01-01"
     },
     "emisor": {
       "ruc": "80069563",
-      "dv": 1,
+      "dvRuc": "1",
       "razonSocial": "MI EMPRESA SA",
-      "direccion": "Asuncion"
+      "tipoContribuyente": 2,
+      "direccion": "Asuncion",
+      "numeroCasa": "0"
     },
     "receptor": {
       "tipoDocumento": 1,
       "documento": "12345678",
-      "dv": 1,
-      "razonSocial": "CLIENTE DE PRUEBA SA"
+      "dvDocumento": "9",
+      "razonSocial": "CLIENTE DE PRUEBA SA",
+      "tipoContribuyente": 2
     },
-    "condicionPago": 1,
+    "pago": { "tipo": 1, "montoEntrega": 200000 },
     "items": [
       {
         "descripcion": "DOCUMENTO ELECTRÓNICO SIN VALOR COMERCIAL NI FISCAL - GENERADO EN AMBIENTE DE PRUEBA",
+        "unidadMedida": 77,
         "cantidad": 1,
         "precioUnitario": 100000,
         "afecIva": 1,
@@ -156,6 +164,7 @@ curl -X POST http://localhost:3000/v1/documentos \
       },
       {
         "descripcion": "Item 2 de prueba",
+        "unidadMedida": 77,
         "cantidad": 2,
         "precioUnitario": 50000,
         "afecIva": 1,
@@ -345,6 +354,29 @@ curl http://localhost:3000/v1/documentos/{CDC}/kude \
 
 ---
 
+### ~~ALTA — AutoFactura (tipo 4) sin bloque `gCamAE`~~ ✅ RESUELTO
+
+**PDF / MT v150**: el checklist exige 5 AutoFacturas APROBADAS y 5 RECHAZADAS.
+
+**Solución aplicada**: `gCamAE` implementado en `generator.ts` con todos los campos del vendedor (`iNatVen`, `dNomVen`, `dRucVen`, `dDVVen`, `dDirVen`, `dNumCasVen`, etc.). `VendedorSchema` agregado a `de.schema.ts` y expuesto como campo opcional `vendedor` en `EmitirDeSchema`. Requerido (con validación en runtime) cuando `tipoDocumento = 4`.
+
+Ejemplo de payload:
+```json
+{
+  "tipoDocumento": 4,
+  "vendedor": {
+    "naturaleza": 2,
+    "nombre": "JUAN PEREZ",
+    "tipoDocumento": 2,
+    "documento": "3456789",
+    "direccion": "San Lorenzo",
+    "numeroCasa": "123"
+  }
+}
+```
+
+---
+
 ### MEDIA — Descripción de prueba no validada
 
 **PDF**: el primer ítem DEBE tener la descripción `"DOCUMENTO ELECTRÓNICO SIN VALOR COMERCIAL NI FISCAL - GENERADO EN AMBIENTE DE PRUEBA"` en ambiente de prueba.
@@ -370,6 +402,16 @@ curl http://localhost:3000/v1/documentos/{CDC}/kude \
 ### ~~INFO — `ENDOSO` deprecado~~ ✅ RESUELTO
 
 `TIPO_EVENTO.ENDOSO = 3` fue eliminado de `constants.ts`. Reemplazado por comentario `// ENDOSO = 3 fue removido del MT v150 — no usar`.
+
+---
+
+### INFO — `iTipTra` hardcodeado a B2B
+
+**MT v150**: `iTipTra` (tipo de transacción) tiene múltiples valores: 1=B2B, 2=B2C, 3=B2G, 4=B2F. Actualmente hardcodeado a `'1'` en `generator.ts:107` y no expuesto en el schema.
+
+**Impacto bajo**: las pruebas de homologación no validan este campo específicamente, pero facturas B2C (persona física) deberían enviar `2`.
+
+**Workaround**: todas las pruebas pueden enviarse con tipo B2B (`1`).
 
 ---
 
@@ -421,14 +463,14 @@ La DNIT llama "Notificación de Recepción de DE/DTE" al evento tipo 10. sifen-a
 - [ ] Disconformidad × 3
 - [ ] Desconocimiento × 3
 - [ ] Acuse de Recibo (Notificación Recepción) × 3
-- [ ] Ajuste del Evento × 3 ⚠️ *No implementado en sifen-api*
+- [ ] Ajuste del Evento × 3
 
 ### Consultas
 - [ ] Consulta por CDC × 3 por tipo (15 total)
 
 ### KuDE y QR
 - [ ] KuDE PDF × 1 por tipo (5 total)
-- [ ] Validación QR portal DNIT × 2 por tipo (10 total) ⚠️ *Hash CSC puede fallar*
+- [ ] Validación QR portal DNIT × 2 por tipo (10 total)
 
 ---
 

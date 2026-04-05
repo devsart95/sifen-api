@@ -200,6 +200,30 @@ function construirCamposEspecificos(parent: XMLBuilder, input: EmitirDeInput): v
     }
   }
 
+  // AutoFactura (tipo 4) — bloque gCamAE con datos del vendedor/proveedor
+  if (tipoDocumento === TIPO_DOCUMENTO.AUTOFACTURA) {
+    const v = input.vendedor
+    if (!v) throw new Error('AutoFactura (tipo 4) requiere el campo "vendedor"')
+    const gCamAE = parent.ele('gCamAE')
+    gCamAE.ele('iNatVen').txt(String(v.naturaleza))
+    gCamAE.ele('dNomVen').txt(v.nombre)
+    if (v.naturaleza === 1) {
+      if (v.ruc) gCamAE.ele('dRucVen').txt(v.ruc)
+      if (v.dvRuc) gCamAE.ele('dDVVen').txt(v.dvRuc)
+    } else {
+      if (v.tipoDocumento != null) gCamAE.ele('iTiDocVen').txt(String(v.tipoDocumento))
+      if (v.documento) gCamAE.ele('dNumIDVen').txt(v.documento)
+    }
+    gCamAE.ele('dDirVen').txt(v.direccion)
+    gCamAE.ele('dNumCasVen').txt(v.numeroCasa)
+    if (v.departamento != null) gCamAE.ele('cDepVen').txt(String(v.departamento))
+    if (v.distrito != null) gCamAE.ele('cDisVen').txt(String(v.distrito))
+    if (v.ciudad != null) gCamAE.ele('cCiuVen').txt(String(v.ciudad))
+    if (v.telefono) gCamAE.ele('dTelVen').txt(v.telefono)
+    if (v.celular) gCamAE.ele('dCelVen').txt(v.celular)
+    if (v.email) gCamAE.ele('dEmailVen').txt(v.email)
+  }
+
   // Nota de Crédito (tipo 5)
   if (tipoDocumento === TIPO_DOCUMENTO.NOTA_CREDITO) {
     const gCamNCDE = parent.ele('gCamNCDE')
